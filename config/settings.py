@@ -3,7 +3,7 @@ import os
 # ==============================================================================
 # Xinference 服务配置 (Xinference Service Configuration)
 # ==============================================================================
-XINFERENCE_API_URL = os.getenv("XINFERENCE_API_URL", "http://127.0.0.1:1874") # Xinference API 服务器 URL
+XINFERENCE_API_URL = os.getenv("XINFERENCE_API_URL", "http://180.163.192.103:1875") # Xinference API 服务器 URL
 
 # ==============================================================================
 # 大语言模型 (LLM) 配置 (Large Language Model Configuration)
@@ -25,7 +25,7 @@ DEFAULT_EMBEDDING_MODEL_NAME = os.getenv("DEFAULT_EMBEDDING_MODEL_NAME", "Qwen3-
 # Reranker 模型配置 (Reranker Model Configuration)
 # ==============================================================================
 DEFAULT_RERANKER_MODEL_NAME = os.getenv("DEFAULT_RERANKER_MODEL_NAME", "Qwen3-Reranker-0.6B") # 默认 Reranker 模型名称
-DEFAULT_RERANKER_BATCH_SIZE = int(os.getenv("DEFAULT_RERANKER_BATCH_SIZE", "2")) # Reranker 处理文档时的批次大小 (调小默认值)
+DEFAULT_RERANKER_BATCH_SIZE = int(os.getenv("DEFAULT_RERANKER_BATCH_SIZE", "20")) # Reranker 处理文档时的批次大小 (调小默认值)
 DEFAULT_RERANKER_MAX_TEXT_LENGTH = int(os.getenv("DEFAULT_RERANKER_MAX_TEXT_LENGTH", "32000")) # 发送给 Reranker 的文档最大字符长度 (调小默认值)
 DEFAULT_RERANKER_INPUT_LIMIT = int(os.getenv("DEFAULT_RERANKER_INPUT_LIMIT", "40")) # 发送给 Reranker 的最大文档数量
 
@@ -39,11 +39,11 @@ DEFAULT_CHUNK_OVERLAP = int(os.getenv("DEFAULT_CHUNK_OVERLAP", "100")) # 通用�
 
 # --- 父子分块配置 (Parent-Child Chunking Configuration) ---
 # 父块旨在包含更丰富的上下文 (例如段落)
-DEFAULT_PARENT_CHUNK_SIZE = int(os.getenv("DEFAULT_PARENT_CHUNK_SIZE", "2000")) # 父块目标字符数
-DEFAULT_PARENT_CHUNK_OVERLAP = int(os.getenv("DEFAULT_PARENT_CHUNK_OVERLAP", "400")) # 父块重叠字符数
+DEFAULT_PARENT_CHUNK_SIZE = int(os.getenv("DEFAULT_PARENT_CHUNK_SIZE", "1000")) # 父块目标字符数
+DEFAULT_PARENT_CHUNK_OVERLAP = int(os.getenv("DEFAULT_PARENT_CHUNK_OVERLAP", "200")) # 父块重叠字符数
 # 子块旨在包含更小、更集中的片段 (例如句子或少量句子)
-DEFAULT_CHILD_CHUNK_SIZE = int(os.getenv("DEFAULT_CHILD_CHUNK_SIZE", "500"))  # 子块目标字符数
-DEFAULT_CHILD_CHUNK_OVERLAP = int(os.getenv("DEFAULT_CHILD_CHUNK_OVERLAP", "100"))   # 子块重叠字符数
+DEFAULT_CHILD_CHUNK_SIZE = int(os.getenv("DEFAULT_CHILD_CHUNK_SIZE", "100"))  # 子块目标字符数
+DEFAULT_CHILD_CHUNK_OVERLAP = int(os.getenv("DEFAULT_CHILD_CHUNK_OVERLAP", "50"))   # 子块重叠字符数
 # 注意: 分隔符可用于更语义化的分块 (例如, "\n\n" 代表段落)。
 # 如果使用 NLTK 进行句子切分，这可能不直接用于子块，但可用于父块或作为后备。
 # 为简单起见，目前主要依赖大小进行分块。
@@ -57,7 +57,7 @@ SUPPORTED_DOC_EXTENSIONS = [".pdf", ".docx", ".txt"] # 支持处理的文档扩�
 
 DEFAULT_VECTOR_STORE_TOP_K = int(os.getenv("DEFAULT_VECTOR_STORE_TOP_K", "20")) # 向量搜索时检索的文档数量
 
-DEFAULT_VECTOR_STORE_PATH = os.getenv("DEFAULT_VECTOR_STORE_PATH", "/home/ISTIC_0/abms/vector_store") # 向量存储索引文件的默认保存路径
+DEFAULT_VECTOR_STORE_PATH = os.getenv("DEFAULT_VECTOR_STORE_PATH", "./my_vector_indexes") # 向量存储索引文件的默认保存路径
 
 # ==============================================================================
 # 混合搜索与检索配置 (Hybrid Search & Retrieval Configuration)
@@ -146,6 +146,61 @@ JSON输出格式定义：
   "core_research_questions_cn": ["核心研究问题一？", "核心研究问题二？"],
   "potential_methodologies_cn": ["潜在研究方法一", "潜在研究方法二"],
   "expanded_queries": ["扩展查询一", "扩展查询二", "扩展查询三"]
+}}
+"""
+
+
+# --- StructurePlannerAgent (Renamed from TopicAnalyzer) ---
+INDUSTRY_STRUCTURE_PLANNER_PROMPT = """你是一个产业研究专家。你的任务是根据检索到的文档摘要，分析该产业的宏观产业链结构。
+请识别该产业的“上游（Upstream）”、“中游（Midstream）”、“下游（Downstream）”分类，并列出每个分类下包含的具体“环节名称”。
+
+产业大类：'{user_topic}'
+
+输出要求：
+1. 必须严格按照下面的JSON格式返回。
+2. 不要包含Markdown格式（如 ```json ... ```）。
+3. 确保环节名称准确、专业。
+4. "upstream", "midstream", "downstream" 对应的值必须是字符串列表。
+
+JSON输出格式：
+{{
+  "upstream": ["原材料A", "原材料B", "关键设备C"],
+  "midstream": ["核心部件制造", "组装加工"],
+  "downstream": ["应用领域X", "终端产品Y"]
+}}
+"""
+
+# --- NodeExtractorAgent (Renamed from ChapterWriter) ---
+NODE_EXTRACTOR_PROMPT = """你是一个产业数据抽取助手。你的任务是针对给定的“产业链环节”，从参考文档中提取详细的结构化信息。
+
+产业链环节名称：'{node_name}'
+
+参考文档：
+---
+{retrieved_content}
+---
+
+请提取以下字段的信息：
+1. entity_name: 环节的标准名称（通常与输入的环节名称一致，或是更具体的名称）。
+2. input_elements: 该环节的关键投入要素（如原材料、零部件、上游设备）。返回列表。
+3. output_products: 该环节的关键产出（如产品、服务、中间件）。返回列表。
+4. key_technologies: 该环节涉及的关键工艺或技术关键词。返回列表。
+5. representative_companies: 该环节的国内外代表性企业。返回列表。
+6. description: 对该环节的简短描述（50字以内）。
+
+输出要求：
+1. 必须严格以JSON格式返回。
+2. 若文档中未提及某字段信息，请在该字段填入空列表 [] 或 null，不要编造。
+3. 必须使用 `response_format={{"type": "json_object"}}` 提示（如果适用）。
+
+JSON输出格式：
+{{
+  "entity_name": "环节名称",
+  "input_elements": ["投入1", "投入2"],
+  "output_products": ["产出1", "产出2"],
+  "key_technologies": ["技术1", "技术2"],
+  "representative_companies": ["企业A", "企业B"],
+  "description": "简短描述..."
 }}
 """
 

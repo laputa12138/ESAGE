@@ -1,7 +1,8 @@
 import logging
 import json
-import json_repair
+import json
 from typing import Dict, Optional
+from core.json_utils import clean_and_parse_json
 
 from agents.base_agent import BaseAgent
 from core.llm_service import LLMService, LLMServiceError
@@ -112,28 +113,29 @@ class RefinerAgent(BaseAgent):
 
             if refined_text and refined_text.strip():
                 try:
-                    # Attempt to parse the JSON response
-                    parsed_response = json_repair.loads(refined_text)
-                    refined_content_from_llm = parsed_response.get("refined_content")
-                    modification_notes_from_llm = parsed_response.get("modification_notes")
+                    # Use the robust JSON parsing helper
+                    parsed_response = clean_and_parse_json(refined_text, context=f"refinement_{chapter_title}")
+                    
+                    if parsed_response and isinstance(parsed_response, dict):
+                        refined_content_from_llm = parsed_response.get("refined_content")
+                        modification_notes_from_llm = parsed_response.get("modification_notes")
 
-                    if refined_content_from_llm:
-                        logger.info(f"Successfully parsed refined content for chapter '{chapter_title}'.")
-                        if modification_notes_from_llm:
-                            logger.info(f"Modification notes for '{chapter_title}': {modification_notes_from_llm}")
+                        if refined_content_from_llm:
+                            logger.info(f"Successfully parsed refined content for chapter '{chapter_title}'.")
+                            if modification_notes_from_llm:
+                                logger.info(f"Modification notes for '{chapter_title}': {modification_notes_from_llm}")
+                            else:
+                                logger.warning(f"No modification notes found in LLM response for '{chapter_title}'.")
                         else:
-                            logger.warning(f"No modification notes found in LLM response for '{chapter_title}'.")
+                            logger.warning(f"LLM response for '{chapter_title}' parsed, but 'refined_content' key is missing or empty. Raw response: {refined_text[:500]}...")
+                            # Fallback to original content if 'refined_content' is missing
+                            refined_content_from_llm = None
                     else:
-                        logger.warning(f"LLM response for '{chapter_title}' parsed, but 'refined_content' key is missing or empty. Raw response: {refined_text}")
-                        # Fallback to original content if 'refined_content' is missing
-                        refined_content_from_llm = None
+                         logger.warning(f"LLM response for '{chapter_title}' failed to parse as JSON. Raw response: {refined_text[:500]}...")
+                         refined_content_from_llm = None
 
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse JSON response from LLM for chapter '{chapter_title}'. Error: {e}. Raw response: {refined_text}")
-                    # Fallback to original content if JSON parsing fails
-                    refined_content_from_llm = None
-                except Exception as e: # Catch any other unexpected errors during parsing
-                    logger.error(f"Unexpected error parsing LLM JSON response for chapter '{chapter_title}'. Error: {e}. Raw response: {refined_text}")
+                except Exception as e: # Catch any unexpected errors during parsing/extraction
+                    logger.error(f"Unexpected error processing LLM JSON response for chapter '{chapter_title}'. Error: {e}. Raw response: {refined_text[:500]}...", exc_info=True)
                     refined_content_from_llm = None
             else:
                 logger.warning(f"LLM returned empty or whitespace-only response for '{chapter_title}'.")

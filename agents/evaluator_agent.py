@@ -1,6 +1,6 @@
 import logging
 import json # Keep for other JSON operations if any, or remove if only repair is used for loading
-import json_repair # Added
+from core.json_utils import clean_and_parse_json
 from typing import Dict, Optional
 
 from agents.base_agent import BaseAgent
@@ -108,26 +108,24 @@ class EvaluatorAgent(BaseAgent):
                 raw_response = self.llm_service.chat(query=prompt, system_prompt="你是一个严格且公正的AI内容评审专家。")
                 logger.debug(f"[{self.agent_name}] Task ID: {task_id} - Raw LLM response for evaluation: {raw_response}")
 
-                try:
-                    json_start_index = raw_response.find('{')
-                    json_end_index = raw_response.rfind('}') + 1
-                    if json_start_index != -1 and json_end_index != -1 and json_start_index < json_end_index:
-                        json_string = raw_response[json_start_index:json_end_index]
-                        evaluation_result = json_repair.loads(json_string)
-                    else:
-                        # If no clear JSON structure is found, try to repair the whole raw_response
-                        logger.warning(f"No clear JSON object found in LLM eval response, attempting to repair entire response: {raw_response}")
-                        evaluation_result = json_repair.loads(raw_response)
-                except (json.JSONDecodeError, ValueError) as e: # json_repair can also raise ValueError
-                    raise EvaluatorAgentError(f"LLM eval response not valid or repairable JSON: {raw_response}. Error: {e}")
+                # Use clean_and_parse_json for robust parsing
+                evaluation_result = clean_and_parse_json(raw_response, context=f"evaluation_{chapter_title}")
+
+                if evaluation_result is None:
+                     raise EvaluatorAgentError(f"LLM eval response could not be parsed as JSON. Raw response: {raw_response[:500]}...")
+
+                if not isinstance(evaluation_result, dict):
+                     raise EvaluatorAgentError(f"LLM eval response is not a dictionary. Got type: {type(evaluation_result)}. Raw response: {raw_response[:500]}...")
 
                 required_keys = ["score", "feedback_cn", "evaluation_criteria_met"]
                 if not all(key in evaluation_result for key in required_keys):
-                    raise EvaluatorAgentError(f"LLM eval response missing keys: {evaluation_result}")
-                if not isinstance(evaluation_result.get("score"), int) or \
+                    raise EvaluatorAgentError(f"LLM eval response missing keys: {required_keys}. Got: {evaluation_result}")
+                
+                if not isinstance(evaluation_result.get("score"), (int, float)) or \
                    not isinstance(evaluation_result.get("feedback_cn"), str) or \
                    not isinstance(evaluation_result.get("evaluation_criteria_met"), dict):
-                    raise EvaluatorAgentError(f"LLM eval response malformed types: {evaluation_result}")
+                     # Allow float for score just in case, though int preferred
+                     raise EvaluatorAgentError(f"LLM eval response malformed types: {evaluation_result}")
 
             except LLMServiceError as e:
                 err_msg = f"LLM service failed for chapter '{chapter_title}': {e}"
