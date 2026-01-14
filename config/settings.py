@@ -55,7 +55,7 @@ SUPPORTED_DOC_EXTENSIONS = [".pdf", ".docx", ".txt"] # 支持处理的文档扩�
 # 向量存储配置 (Vector Store Configuration)
 # ==============================================================================
 
-DEFAULT_VECTOR_STORE_TOP_K = int(os.getenv("DEFAULT_VECTOR_STORE_TOP_K", "20")) # 向量搜索时检索的文档数量
+DEFAULT_VECTOR_STORE_TOP_K = int(os.getenv("DEFAULT_VECTOR_STORE_TOP_K", "10")) # 向量搜索时检索的文档数量
 
 DEFAULT_VECTOR_STORE_PATH = os.getenv("DEFAULT_VECTOR_STORE_PATH", "./my_vector_indexes") # 向量存储索引文件的默认保存路径
 

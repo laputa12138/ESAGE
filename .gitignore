@@ -88,3 +88,4 @@ output/*
 vector_store/
 *.faiss
 *.meta.json.agent/
+*.meta.json

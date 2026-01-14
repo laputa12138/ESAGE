@@ -62,9 +62,9 @@ def main():
     )
 
     parser.add_argument("--topic", type=str, required=True, help="Industry topic.")
-    parser.add_argument("--data_path", type=str, default="./data/", help="Source documents directory.")
-    parser.add_argument("--output_path", type=str, default=f"output/graph_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", help="Path to save JSON output.")
-    
+    parser.add_argument("--data_path", type=str, default="./data/v2", help="Source documents directory.")
+    parser.add_argument("--output_path", type=str, default=f"output/graph_{args.topic}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", help="Path to save JSON output.")
+        
     # Xinference
     parser.add_argument("--xinference_url", type=str, default=settings.XINFERENCE_API_URL)
     parser.add_argument("--llm_model", type=str, default=settings.DEFAULT_LLM_MODEL_NAME)
@@ -85,7 +85,7 @@ def main():
 
     args = parser.parse_args()
 
-    log_file_name = f"extraction_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    log_file_name = f"extraction_{args.topic}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     full_log_file_path = os.path.join(args.log_path, log_file_name) if args.log_path else None
     setup_logging(log_level_str=args.log_level, debug_mode=args.debug, log_file_path=full_log_file_path)
 
