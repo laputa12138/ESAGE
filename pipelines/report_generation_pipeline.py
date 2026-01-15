@@ -181,7 +181,9 @@ class ReportGenerationPipeline:
             self._initialize_components()
 
             # Add initial task
-            self.workflow_state.add_task(TASK_TYPE_PLAN_STRUCTURE, payload={'user_topic': user_topic})
+            initial_payload = {'user_topic': user_topic}
+            initial_payload.update(kwargs) # Pass through CLI args like max_recursion_depth
+            self.workflow_state.add_task(TASK_TYPE_PLAN_STRUCTURE, payload=initial_payload)
             
             # Run Orchestrator
             self.orchestrator.coordinate_workflow()

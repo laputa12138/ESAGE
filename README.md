@@ -6,13 +6,13 @@
 
 **E-SAGE** (Evidence-based Structural Alignment and Graph Extraction) 是一个基于多智能体协同（Multi-Agent Collaboration）和检索增强生成（RAG）技术的先进系统。旨在从大量非结构化文档（如行业报告、政策文件、PDF/Word）中，自动提取产业链结构，并生成包含节点详细信息及溯源证据的结构化图谱（Graph）。
 
-本系统通过模拟人类专家的研究流程，实现了从**主题分析**、**结构规划**到**证据溯源**的全自动化工作流，有效解决了传统信息提取中的幻觉问题和结构混乱问题。
+本系统通过模拟人类专家的研究流程，实现了从**主题分析**、**结构规划**、**证据溯源**到**递归扩展**的全自动化工作流，有效解决了传统信息提取中的幻觉问题和结构混乱问题。
 
 ### 核心特性
 
 * **多智能体协同架构**: 采用 `Orchestrator` 编排多个专业 Agent（如结构规划、节点提取），模拟专家分工协作。
+* **递归式图谱生长 (Recursive Tree-Growing)**: 系统不仅执行静态规划，还能在抽取过程中自动发现新的上游/下游节点，并动态扩展抽取范围，直至达到预设深度。
 * **证据驱动 (Evidence-based)**: 所有提取的节点和关系均强关联至原始文档片段，确保信息可追溯、可验证。
-* **动态图谱构建**: 支持通过 `StructurePlannerAgent` 自主规划产业链层级与节点，并由 `NodeExtractorAgent` 填充细节。
 * **混合检索与父子分块**: 结合向量检索与 BM25 关键词检索，利用 Parent-Child Chunking 策略兼顾检索精度与上下文完整性。
 * **本地化隐私保护**: 深度集成 Xinference，支持本地部署 LLM 和 Embedding 模型，确保数据安全。
 
@@ -20,11 +20,11 @@
 
 系统基于动态任务驱动的工作流引擎运行，主要组件包括：
 
-1. **WorkflowState (工作流状态)**: 作为系统的“短时记忆”，维护任务队列、图谱数据（Graph）和上下文信息。
+1. **WorkflowState (工作流状态)**: 作为系统的“短时记忆”，维护任务队列、动态图谱结构（Graph）和上下文信息。
 2. **Orchestrator (编排器)**: 负责任务调度，根据当前状态动态分发任务给最合适的 Agent。
 3. **核心 Agents**:
-   * `StructurePlannerAgent`: 负责“宏观规划”，分析行业主题，定义产业链的上、中、下游结构及关键节点名称。
-   * `NodeExtractorAgent`: 负责“微观提取”，针对规划出的节点，从文档中检索具体信息（如市场规模、核心企业），并关联原文证据。
+   * `StructurePlannerAgent`: **宏观规划者**。分析行业主题，定义初始的产业链上、中、下游骨架。
+   * `NodeExtractorAgent`: **微观探索者**。针对具体节点抽取详细信息，并具备**自我扩展能力**——能够从抽取内容中识别新的关联节点（如原材料、产成品），触发递归抽取。
 4. **RetrievalService (检索服务)**: 统一封装向量检索（FAISS）和关键词检索（BM25），提供高质量的上下文。
 
 ## 环境安装
@@ -68,26 +68,26 @@ E:\miniconda\envs\ym\python.exe main.py --topic "低空经济"
 | 参数                    | 说明                                                     | 默认值                               |
 | :---------------------- | :------------------------------------------------------- | :----------------------------------- |
 | `--topic`             | **(必选)** 行业主题名称，如 "低空经济"、"商业航天" | 无                                   |
-| `--data_path`         | 源文档目录路径                                           | `./data/v2`                        |
+| `--data_path`         | 源文档目录路径                                           | `./data`                        |
 | `--output_path`       | 结果 JSON 保存路径                                       | `output/graph_{topic}_{time}.json` |
+| `--max_recursion_depth` | **(新增)** 递归扩展深度。0=仅静态规划，>0=允许动态发现新节点 | `2`                                  |
 | `--vector_store_path` | 向量索引保存/加载路径                                    | `./my_vector_indexes/`             |
 | `--force_reindex`     | 是否强制重新构建向量索引                                 | `False`                            |
-| `--log_level`         | 日志级别 (DEBUG, INFO)                                   | `INFO`                             |
 
 ### 运行示例
 
-**示例 1：标准抽取**
-处理 `./data/v2` 下的文档，生成 "低空经济" 产业链图谱。
+**示例 1：标准抽取（带自动扩展）**
+处理 `./data` 下的文档，生成 "生物医药" 产业链图谱，允许向下扩展 2 层。
 
 ```bash
-E:\miniconda\envs\ym\python.exe main.py --topic "生物医药" --data_path "./data/v2" --output_path 'output/bio.json'
+E:\miniconda\envs\ym\python.exe main.py --topic "生物医药" --data_path "./data" --output_path 'output/bio.json' --max_recursion_depth 2
 ```
 
-**示例 2：强制重新索引**
-如果添加了新文档，需加上 `--force_reindex` 标志。
+**示例 2：仅静态规划（无递归）**
+如果只想获取最顶层的规划结构，不进行深度挖掘：
 
 ```bash
-E:\miniconda\envs\ym\python.exe main.py --topic "商业航天" --data_path "./data/aerospace" --force_reindex
+E:\miniconda\envs\ym\python.exe main.py --topic "光伏产业" --max_recursion_depth 0
 ```
 
 ### 输出结果
@@ -96,20 +96,21 @@ E:\miniconda\envs\ym\python.exe main.py --topic "商业航天" --data_path "./da
 
 ```json
 {
-  "root": "低空经济",
-  "layers": [
-    {
-      "name": "上游：原材料与核心零部件",
-      "nodes": [
-        {
-          "name": "碳纤维",
-          "details": "...",
-          "evidence": "..."
-        }
-      ]
-    },
-    ...
-  ]
+  "root_topic": "低空经济",
+  "structure": {
+    "upstream": ["碳纤维", "航空发动机", ...],
+    "midstream": [...],
+    "downstream": [...]
+  },
+  "node_details": {
+    "碳纤维": {
+      "entity_name": "碳纤维",
+      "description": "...",
+      "input_elements": ["聚丙烯腈"], // 可能触发递归抽取
+      "output_products": ["机身复合材料"],
+      "evidence_refs": { ... }
+    }
+  }
 }
 ```
 
@@ -117,10 +118,10 @@ E:\miniconda\envs\ym\python.exe main.py --topic "商业航天" --data_path "./da
 
 ```text
 .
-├── agents/                     # [核心] 各类 AI 智能体实现
+├── agents/                     # [核心] 智能体实现
 │   ├── structure_planner_agent.py   # 结构规划
-│   ├── node_extractor_agent.py      # 节点内容提取
-│   └── ...
+│   ├── node_extractor_agent.py      # 节点内容提取与递归发现
+│   └── base_agent.py                # 基类
 ├── core/                       # [核心] 基础服务模块
 │   ├── orchestrator.py         # 任务编排
 │   ├── workflow_state.py       # 状态管理

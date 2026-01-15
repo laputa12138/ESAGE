@@ -6,7 +6,7 @@ from typing import Dict, Optional, List, Any
 from agents.base_agent import BaseAgent
 from core.llm_service import LLMService, LLMServiceError
 from core.retrieval_service import RetrievalService, RetrievalServiceError
-from core.workflow_state import WorkflowState
+from core.workflow_state import WorkflowState, TASK_TYPE_EXTRACT_NODE
 from config import settings as app_settings
 from core.json_utils import clean_and_parse_json
 
@@ -126,7 +126,14 @@ class NodeExtractorAgent(BaseAgent):
                     # 即使匹配失败，也保留原始提取数据，避免任务完全失败
                     extracted_data['source_tracing_error'] = str(e)
 
-            # 5. 更新工作流状态
+            # 5. Expand Graph (Recursive Extraction)
+            current_depth = task_payload.get('depth', 0)
+            max_depth = task_payload.get('max_depth', 2) # Default limit to prevent infinite loops
+
+            if current_depth < max_depth:
+                self._expand_nodes(extracted_data, workflow_state, current_depth, max_depth)
+
+            # 6. 更新工作流状态
             workflow_state.update_node_details(node_name, extracted_data)
 
             success_msg = f"节点 '{node_name}' 数据抽取完成。"
@@ -193,3 +200,53 @@ class NodeExtractorAgent(BaseAgent):
         extracted_data['evidence_refs'] = evidence_refs_map
         extracted_data['filtered_items'] = filtered_items_map
         return extracted_data
+
+    def _expand_nodes(self, extracted_data: Dict[str, Any], workflow_state: WorkflowState, current_depth: int, max_depth: int):
+        """
+        Analyzes the extracted data to find new candidate nodes and adds them to the workflow.
+        Structure mapping:
+          - input_elements -> upstream
+          - output_products -> downstream
+        """
+        if not extracted_data:
+            return
+
+        expansion_rules = [
+            ('input_elements', 'upstream'),
+            ('output_products', 'downstream')
+        ]
+
+        logger.info(f"[{self.agent_name}] Checking for node expansion (Depth: {current_depth}/{max_depth})...")
+
+        new_nodes_count = 0
+        for field, category in expansion_rules:
+            items = extracted_data.get(field, [])
+            if not isinstance(items, list):
+                continue
+
+            for item in items:
+                if not isinstance(item, str) or not item.strip():
+                    continue
+                
+                # Check if it's a valid candidate (simple heuristic for now: length check)
+                if len(item) > 20: # Skip very long descriptions masquerading as entities
+                    continue
+
+                # Add to workflow
+                # add_node_to_structure returns True if it's a NEW node
+                if workflow_state.add_node_to_structure(item, category):
+                    workflow_state.add_task(
+                        task_type=TASK_TYPE_EXTRACT_NODE,
+                        payload={
+                            'node_name': item, 
+                            'category': category,
+                            'depth': current_depth + 1,
+                            'max_depth': max_depth
+                        },
+                        priority=1 # High priority to explore deeper
+                    )
+                    new_nodes_count += 1
+        
+        if new_nodes_count > 0:
+            logger.info(f"[{self.agent_name}] Expanded graph with {new_nodes_count} new nodes.")
+

@@ -135,6 +135,38 @@ class WorkflowState:
         self.set_flag('structure_planned', True)
         self.log_event("Industry graph structure initialized.", {"total_nodes": total_nodes, "structure": structure_data})
 
+    def add_node_to_structure(self, node_name: str, category: str) -> bool:
+        """
+        Dynamically adds a new node to the industry structure.
+        Returns True if the node was added (didn't exist), False otherwise.
+        """
+        if category not in ['upstream', 'midstream', 'downstream']:
+            logger.warning(f"Invalid category '{category}' for node '{node_name}'. Defaulting to 'upstream' for safety.")
+            # Default fallback logic or strict reject? Let's be flexible but warn.
+            # Actually, let's keep it strict or existing categories.
+            if category not in self.industry_graph['structure']:
+                 self.industry_graph['structure'][category] = [] # Initialize if new category somehow
+
+        # Check if already exists in ANY category to avoid duplicates across the graph
+        # (Though technically a node could be both downstream of A and upstream of B, 
+        # for simplicity in this tree view, we might want unique nodes for now)
+        for cat in self.industry_graph['structure']:
+            if node_name in self.industry_graph['structure'][cat]:
+                return False
+        
+        # Add to structure
+        if category not in self.industry_graph['structure']:
+             self.industry_graph['structure'][category] = []
+        
+        self.industry_graph['structure'][category].append(node_name)
+        
+        # Initialize details
+        if node_name not in self.industry_graph['node_details']:
+            self.industry_graph['node_details'][node_name] = None
+            
+        self.log_event(f"Dynamically added node: {node_name} (Category: {category})")
+        return True
+
     def update_node_details(self, node_name: str, extracted_data: Dict[str, Any]):
         """
         Updates the details for a specific node after extraction.

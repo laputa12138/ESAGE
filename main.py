@@ -81,6 +81,7 @@ def main():
     parser.add_argument("--vector_store_path", type=str, default="./my_vector_indexes/")
     parser.add_argument("--vector_top_k", type=int, default=settings.DEFAULT_VECTOR_STORE_TOP_K)
     parser.add_argument("--force_reindex", action='store_true', help="Force re-indexing documents.")
+    parser.add_argument("--max_recursion_depth", type=int, default=2, help="Max recursion depth for industry chain expansion (0 = no expansion).")
     
 
     # Logging

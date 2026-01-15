@@ -112,7 +112,12 @@ class StructurePlannerAgent(BaseAgent):
                 for node in nodes:
                     workflow_state.add_task(
                         task_type=TASK_TYPE_EXTRACT_NODE,
-                        payload={'node_name': node, 'category': category},
+                        payload={
+                            'node_name': node, 
+                            'category': category,
+                            'depth': 0, # Initial planned nodes are depth 0
+                            'max_depth': task_payload.get('max_recursion_depth', 2)
+                        },
                         priority=1
                     )
                     total_tasks_added += 1
