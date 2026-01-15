@@ -10,6 +10,8 @@ from core.workflow_state import WorkflowState
 from config import settings as app_settings
 from core.json_utils import clean_and_parse_json
 
+from core.posterior_verifier import PosteriorVerifier
+
 logger = logging.getLogger(__name__)
 
 class NodeExtractorAgentError(Exception):
@@ -28,6 +30,13 @@ class NodeExtractorAgent(BaseAgent):
                  prompt_template: Optional[str] = None):
         super().__init__(agent_name="NodeExtractorAgent", llm_service=llm_service)
         self.retrieval_service = retrieval_service
+        
+        # Initialize PosteriorVerifier if reranker is available
+        self.posterior_verifier = None
+        if hasattr(self.retrieval_service, 'reranker_service') and self.retrieval_service.reranker_service:
+            self.posterior_verifier = PosteriorVerifier(self.retrieval_service.reranker_service)
+        else:
+            logger.warning(f"[{self.agent_name}] RerankerService missing, PosteriorVerifier disabled.")
         self.prompt_template = prompt_template or app_settings.NODE_EXTRACTOR_PROMPT
         
         if not self.llm_service:
@@ -132,19 +141,13 @@ class NodeExtractorAgent(BaseAgent):
 
     def _match_evidence(self, extracted_data: Dict[str, Any], retrieved_docs: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        使用 Reranker 对提取出的每个细节进行溯源，找到最相关的来源文档和证据片段。
-        
-        Args:
-            extracted_data: LLM 提取出的 JSON 数据。
-            retrieved_docs: 检索回来的文档列表（即 RAG 上下文）。
-            
-        Returns:
-            更新后的提取数据，包含 'sources' 和 'evidence_snippets' 字段。
+        使用 PosteriorVerifier 对提取出的每个细节进行严格溯源。
+        验证失败的条目将被标记或移除。
         """
-        if not retrieved_docs:
+        if not retrieved_docs or not self.posterior_verifier:
+            logger.warning(f"[{self.agent_name}] 无法进行后验溯源 (Docs={len(retrieved_docs)}, Verifier={self.posterior_verifier is not None})")
             return extracted_data
 
-        # 需要进行溯源的字段列表
         fields_to_trace = [
             "input_elements", 
             "output_products", 
@@ -152,57 +155,41 @@ class NodeExtractorAgent(BaseAgent):
             "representative_companies"
         ]
         
-        sources = {}
-        evidence_snippets = {}
+        evidence_refs_map = {}
+        filtered_items_map = {}
         
-        # 准备文档内容列表供 Reranker 使用
-        # 注意：这里我们使用 parent_text 作为完整的文档内容进行匹配
-        doc_contents = [doc.get('document', '') for doc in retrieved_docs]
-        doc_names = [doc.get('source_document_name', 'Unknown') for doc in retrieved_docs]
-        
-        reranker = getattr(self.retrieval_service, 'reranker_service', None)
-        
-        if not reranker:
-            logger.warning(f"[{self.agent_name}] RerankerService 不可用，无法进行精确溯源匹配。跳过匹配步骤。")
-            return extracted_data
-
         for field in fields_to_trace:
             items = extracted_data.get(field)
             if not items or not isinstance(items, list):
                 continue
             
+            verified_items = []
+            filtered_field_items = []
+            
             for item in items:
                 if not isinstance(item, str) or not item.strip():
                     continue
                     
-                # 使用 item 作为 query，在 retrieved_docs 中寻找最相关的文档
-                try:
-                    # rerank 接受 query 和 documents 列表
-                    # 返回按分数排序的结果 list
-                    rerank_results = reranker.rerank(
-                        query=item,
-                        documents=doc_contents,
-                        top_n=1
-                    )
-                    
-                    if rerank_results:
-                        best_match = rerank_results[0]
-                        best_idx = best_match['original_index']
-                        best_score = best_match['relevance_score']
-                        
-                        # 可以设置一个阈值，如果分数太低则认为没有来源 (Optional)
-                        # if best_score > 0.3: 
-                        source_name = doc_names[best_idx]
-                        evidence_text = doc_contents[best_idx]
-                        
-                        sources[item] = source_name
-                        evidence_snippets[item] = evidence_text
-                        
-                except Exception as e:
-                    logger.warning(f"[{self.agent_name}] 为条目 '{item}' 进行 Rerank 匹配时失败: {e}")
-                    continue
+                # 调用 PosteriorVerifier 进行验证
+                verify_result = self.posterior_verifier.verify_item(item, retrieved_docs)
+                
+                if verify_result['verified']:
+                    verified_items.append(item)
+                    evidence_refs_map[item] = verify_result['evidence_refs']
+                    logger.debug(f"[{self.agent_name}] Item verified: '{item}' -> {len(verify_result['evidence_refs'])} evidence(s)")
+                else:
+                    reason = verify_result.get('reason', 'Unknown rejection reason')
+                    logger.info(f"[{self.agent_name}] Item REJECTED: '{item}' Reason: {reason}")
+                    filtered_field_items.append({
+                        "value": item,
+                        "reason": reason
+                    })
+            
+            # Update the list with only verified items
+            extracted_data[field] = verified_items
+            if filtered_field_items:
+                filtered_items_map[field] = filtered_field_items
 
-        extracted_data['sources'] = sources
-        extracted_data['evidence_snippets'] = evidence_snippets
-        
+        extracted_data['evidence_refs'] = evidence_refs_map
+        extracted_data['filtered_items'] = filtered_items_map
         return extracted_data

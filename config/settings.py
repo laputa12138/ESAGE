@@ -72,6 +72,7 @@ DEFAULT_RETRIEVAL_FINAL_TOP_N = int(os.getenv("DEFAULT_RETRIEVAL_FINAL_TOP_N", "
 
 # RERANKER 阈值
 RERANKER_SCORE_THRESHOLD = float(os.getenv("RERANKER_SCORE_THRESHOLD", "0.6"))
+VERIFICATION_THRESHOLD = float(os.getenv("VERIFICATION_THRESHOLD", "0.5"))
 
 # Chapter Writer Agent Configuration
 USE_LLM_RELEVANCE_CHECK = os.getenv("USE_LLM_RELEVANCE_CHECK", "True").lower() == "true"

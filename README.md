@@ -1,4 +1,5 @@
 # E-SAGE: 基于多智能体协同的产业链结构化生成与演化引擎
+
 # (E-SAGE: Evidence-based Structural Alignment and Graph Extraction)
 
 ## 项目简介
@@ -9,33 +10,35 @@
 
 ### 核心特性
 
-*   **多智能体协同架构**: 采用 `Orchestrator` 编排多个专业 Agent（如结构规划、节点提取），模拟专家分工协作。
-*   **证据驱动 (Evidence-based)**: 所有提取的节点和关系均强关联至原始文档片段，确保信息可追溯、可验证。
-*   **动态图谱构建**: 支持通过 `StructurePlannerAgent` 自主规划产业链层级与节点，并由 `NodeExtractorAgent` 填充细节。
-*   **混合检索与父子分块**: 结合向量检索与 BM25 关键词检索，利用 Parent-Child Chunking 策略兼顾检索精度与上下文完整性。
-*   **本地化隐私保护**: 深度集成 Xinference，支持本地部署 LLM 和 Embedding 模型，确保数据安全。
+* **多智能体协同架构**: 采用 `Orchestrator` 编排多个专业 Agent（如结构规划、节点提取），模拟专家分工协作。
+* **证据驱动 (Evidence-based)**: 所有提取的节点和关系均强关联至原始文档片段，确保信息可追溯、可验证。
+* **动态图谱构建**: 支持通过 `StructurePlannerAgent` 自主规划产业链层级与节点，并由 `NodeExtractorAgent` 填充细节。
+* **混合检索与父子分块**: 结合向量检索与 BM25 关键词检索，利用 Parent-Child Chunking 策略兼顾检索精度与上下文完整性。
+* **本地化隐私保护**: 深度集成 Xinference，支持本地部署 LLM 和 Embedding 模型，确保数据安全。
 
 ## 系统架构
 
 系统基于动态任务驱动的工作流引擎运行，主要组件包括：
 
-1.  **WorkflowState (工作流状态)**: 作为系统的“短时记忆”，维护任务队列、图谱数据（Graph）和上下文信息。
-2.  **Orchestrator (编排器)**: 负责任务调度，根据当前状态动态分发任务给最合适的 Agent。
-3.  **核心 Agents**:
-    *   `StructurePlannerAgent`: 负责“宏观规划”，分析行业主题，定义产业链的上、中、下游结构及关键节点名称。
-    *   `NodeExtractorAgent`: 负责“微观提取”，针对规划出的节点，从文档中检索具体信息（如市场规模、核心企业），并关联原文证据。
-4.  **RetrievalService (检索服务)**: 统一封装向量检索（FAISS）和关键词检索（BM25），提供高质量的上下文。
+1. **WorkflowState (工作流状态)**: 作为系统的“短时记忆”，维护任务队列、图谱数据（Graph）和上下文信息。
+2. **Orchestrator (编排器)**: 负责任务调度，根据当前状态动态分发任务给最合适的 Agent。
+3. **核心 Agents**:
+   * `StructurePlannerAgent`: 负责“宏观规划”，分析行业主题，定义产业链的上、中、下游结构及关键节点名称。
+   * `NodeExtractorAgent`: 负责“微观提取”，针对规划出的节点，从文档中检索具体信息（如市场规模、核心企业），并关联原文证据。
+4. **RetrievalService (检索服务)**: 统一封装向量检索（FAISS）和关键词检索（BM25），提供高质量的上下文。
 
 ## 环境安装
 
 本系统要求使用特定的 Conda 环境运行。
 
 ### 1. 环境依赖
-*   **操作系统**: Windows / Linux
-*   **Python**: 3.8+
-*   **Conda 环境名称**: `ym`
+
+* **操作系统**: Windows / Linux
+* **Python**: 3.8+
+* **Conda 环境名称**: `ym`
 
 ### 2. 安装步骤
+
 ```bash
 # 激活 Conda 环境
 conda activate ym
@@ -45,6 +48,7 @@ pip install -r requirements.txt
 ```
 
 ### 3. 模型服务
+
 确保本地已启动 [Xinference](https://github.com/xorbitsai/inference) 服务，并部署了在 `config/settings.py` 中配置的模型（LLM, Embedding, Reranker）。
 
 ## 使用指南
@@ -61,25 +65,27 @@ E:\miniconda\envs\ym\python.exe main.py --topic "低空经济"
 
 ### 常用参数
 
-| 参数 | 说明 | 默认值 |
-| :--- | :--- | :--- |
-| `--topic` | **(必选)** 行业主题名称，如 "低空经济"、"商业航天" | 无 |
-| `--data_path` | 源文档目录路径 | `./data/v2` |
-| `--output_path` | 结果 JSON 保存路径 | `output/graph_{topic}_{time}.json` |
-| `--vector_store_path` | 向量索引保存/加载路径 | `./my_vector_indexes/` |
-| `--force_reindex` | 是否强制重新构建向量索引 | `False` |
-| `--log_level` | 日志级别 (DEBUG, INFO) | `INFO` |
+| 参数                    | 说明                                                     | 默认值                               |
+| :---------------------- | :------------------------------------------------------- | :----------------------------------- |
+| `--topic`             | **(必选)** 行业主题名称，如 "低空经济"、"商业航天" | 无                                   |
+| `--data_path`         | 源文档目录路径                                           | `./data/v2`                        |
+| `--output_path`       | 结果 JSON 保存路径                                       | `output/graph_{topic}_{time}.json` |
+| `--vector_store_path` | 向量索引保存/加载路径                                    | `./my_vector_indexes/`             |
+| `--force_reindex`     | 是否强制重新构建向量索引                                 | `False`                            |
+| `--log_level`         | 日志级别 (DEBUG, INFO)                                   | `INFO`                             |
 
 ### 运行示例
 
 **示例 1：标准抽取**
 处理 `./data/v2` 下的文档，生成 "低空经济" 产业链图谱。
+
 ```bash
-E:\miniconda\envs\ym\python.exe main.py --topic "低空经济" --data_path "./data/v2"
+E:\miniconda\envs\ym\python.exe main.py --topic "生物医药" --data_path "./data/v2" --output_path 'output/bio.json'
 ```
 
 **示例 2：强制重新索引**
 如果添加了新文档，需加上 `--force_reindex` 标志。
+
 ```bash
 E:\miniconda\envs\ym\python.exe main.py --topic "商业航天" --data_path "./data/aerospace" --force_reindex
 ```
@@ -87,6 +93,7 @@ E:\miniconda\envs\ym\python.exe main.py --topic "商业航天" --data_path "./da
 ### 输出结果
 
 脚本运行完成后，将在 `output/` 目录下生成一个 JSON 文件，包含完整的产业链图谱结构：
+
 ```json
 {
   "root": "低空经济",
