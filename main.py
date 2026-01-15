@@ -38,6 +38,11 @@ def setup_logging(log_level_str: str = 'INFO', debug_mode: bool = False, log_fil
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
 
+    # Suppress pdfminer debug logs which are very verbose
+    logging.getLogger("pdfminer").setLevel(logging.WARNING)
+    logging.getLogger("pdfminer.psparser").setLevel(logging.WARNING)
+    logging.getLogger("pdfminer.six").setLevel(logging.WARNING)
+
     if log_file_path:
         log_dir = os.path.dirname(log_file_path)
         if log_dir and not os.path.exists(log_dir):
@@ -62,7 +67,7 @@ def main():
     )
 
     parser.add_argument("--topic", type=str, required=True, help="Industry topic.")
-    parser.add_argument("--data_path", type=str, default="./data/v2", help="Source documents directory.")
+    parser.add_argument("--data_path", type=str, default="./data", help="Source documents directory.")
     parser.add_argument("--output_path", type=str, default=None, help="Path to save JSON output. Defaults to output/graph_<topic>_<timestamp>.json")
         
     # Xinference
