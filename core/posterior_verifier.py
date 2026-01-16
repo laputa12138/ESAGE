@@ -175,7 +175,9 @@ class PosteriorVerifier:
 """
         try:
             # 使用较快的模型或默认模型
-            response = self.llm_service.chat(prompt, max_tokens=10, temperature=0.1) # 低温确保确定性
+            # Critical Fix: Thinking models require more tokens to output the reasoning process before the answer.
+            # max_tokens=10 cuts off the thinking block, returning nothing useful.
+            response = self.llm_service.chat(prompt, max_tokens=2048, temperature=0.1) # 低温确保确定性
             
             # 提取数字
             match = re.search(r"(\d+(\.\d+)?)", response)

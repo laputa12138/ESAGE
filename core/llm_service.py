@@ -1,5 +1,6 @@
 import logging
 from xinference.client import Client
+import re
 from config.settings import (
     XINFERENCE_API_URL,
     DEFAULT_LLM_MODEL_NAME,
@@ -115,6 +116,19 @@ class LLMService:
             if response and "choices" in response and len(response["choices"]) > 0:
                 assistant_message = response["choices"][0].get("message", {}).get("content")
                 if assistant_message:
+                    # Handling Reasoning Models (e.g. DeepSeek-R1) with <think> blocks
+                    # User specified format: '<think> ... <\think> answer' or standard '</think>'
+                    # refined regex to capture content after the closing think tag
+                    # Matches both <\think> and </think>
+                    split_pattern = r"(?:<\\think>|<\/think>)"
+                    
+                    if re.search(split_pattern, assistant_message):
+                        # Split by the closing tag and take the last part (the actual answer)
+                        parts = re.split(split_pattern, assistant_message)
+                        cleaned_message = parts[-1].strip()
+                        logger.debug(f"Detected thinking block. Stripped. Original len: {len(assistant_message)}, Cleaned len: {len(cleaned_message)}")
+                        assistant_message = cleaned_message
+                        
                     log_assistant_message_display = assistant_message if len(assistant_message) < 500 else assistant_message[:500] + "... (truncated)"
                     logger.debug(f"LLM Assistant Message (preview): {log_assistant_message_display}")
                     if len(assistant_message) > 2000: # Log more for very long outputs if necessary
