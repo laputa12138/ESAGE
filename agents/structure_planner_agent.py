@@ -59,8 +59,9 @@ class StructurePlannerAgent(BaseAgent):
             logger.error(f"[{self.agent_name}] 检索失败: {e}")
             raise StructurePlannerAgentError(f"检索失败: {e}") from e
 
-    def execute_task(self, workflow_state: WorkflowState, task_payload: Dict) -> None:
+    def execute_task(self, workflow_state: WorkflowState, task: Dict) -> None:
         task_id = workflow_state.current_processing_task_id
+        task_payload = task.get('payload', {})
         user_topic = task_payload.get('user_topic')
         
         logger.info(f"[{self.agent_name}] 开始规划产业结构: {user_topic}")

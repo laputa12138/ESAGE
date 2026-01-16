@@ -54,11 +54,13 @@ class ValidatorAgent(BaseAgent):
 如果列表为空，请返回空数组。
 """
 
-    def execute_task(self, workflow_state: WorkflowState, task_payload: Dict) -> None:
+    def execute_task(self, workflow_state: WorkflowState, task: Dict) -> None:
         """
         执行验证任务。通常在抽取工作流的末尾调用。
         """
         task_id = workflow_state.current_processing_task_id
+        # ValidatorAgent mostly works on the graph state, doesn't need specific payload
+        task_payload = task.get('payload', {})
         logger.info(f"[{self.agent_name}] 开始执行图谱验证与清洗...")
         
         try:

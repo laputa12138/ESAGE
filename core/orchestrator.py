@@ -48,7 +48,8 @@ class Orchestrator:
                 task_name_cn = "结构规划" if task_type == TASK_TYPE_PLAN_STRUCTURE else "节点抽取"
                 self.workflow_state.log_event(f"编排器正在分发任务 '{task_name_cn}' 给智能体 '{agent.agent_name}'。",
                                              {"task_id": task_id, "payload": payload})
-                agent.execute_task(self.workflow_state, payload)
+                # PASS FULL TASK OBJECT, NOT PAYLOAD
+                agent.execute_task(self.workflow_state, task)
                 # Agents are responsible for calling workflow_state.complete_task for their own tasks.
             except Exception as e:
                 logger.error(f"执行任务 {task_type} ({task_id}) 时发生错误: {e}", exc_info=True)
