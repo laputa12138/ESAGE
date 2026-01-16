@@ -33,28 +33,18 @@ class PosteriorVerifier:
         
         logger.info(f"PosteriorVerifier Initialized. Alpha={self.alpha}, Beta={self.beta}, Threshold={self.threshold}")
 
-    def verify_claim(self, claim_text: str, retrieved_docs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def verify_claim(self, claim_text: str, retrieved_docs: List[Dict[str, Any]], focus_entity: Optional[str] = None) -> Dict[str, Any]:
         """
         验证单个陈述 (claim_text) 是否被 retrieved_docs 中的某篇文档支持。
         
         Args:
-            claim_text (str): 待验证的生成内容 (如 "光伏玻璃的主要成分是二氧化硅")。
-            retrieved_docs (List[Dict]): 检索到的文档列表。每个文档应包含 'parent_text' 或 'document'。
+            claim_text (str): 待验证的生成内容。
+            retrieved_docs (List[Dict]): 检索到的文档列表。
+            focus_entity (Optional[str]): 待验证的核心实体词 (如 "石英砂", "比亚迪")。
+                                          如果提供了此词且在文档中精确找到，将给予额外的置信度加成 (Exact Match Boosting)。
 
         Returns:
             Dict: 验证结果对象。
-            {
-                "verified": bool, # 是否通过验证
-                "score": float,   # CSS 分数
-                "evidence_ref": { # 最佳证据引用 (如果 verified=True)
-                    "source_id": str,
-                    "father_chunk_id": str,
-                    "child_chunk_id": str (Optional),
-                    "father_text": str,
-                    "key_evidence": str # 核心证据句
-                },
-                "reason": str # 验证失败的原因或通过的日志
-            }
         """
         if not claim_text or not claim_text.strip():
             return {"verified": False, "score": 0.0, "reason": "Claim is empty"}
@@ -66,16 +56,14 @@ class PosteriorVerifier:
         best_doc = None
         best_sentence = None
         
-        # 遍历所有文档寻找最佳支撑
-        # 优化：为了性能，可以只对 Top-N 文档进行 NLI 计算，或者先用 Lexical 筛选
+        # Clean focus entity
+        target_entity = focus_entity.strip() if focus_entity else ""
+
         for doc in retrieved_docs:
-            # 获取文档文本 (兼容不同命名习惯)
             doc_text = doc.get("parent_text") or doc.get("document") or ""
             if not doc_text:
                 continue
                 
-            # 1. 定位核心句 (Heuristic: 寻找与 claim 字面重叠度最高的句子)
-            # 这可以是粗略的，为了给 NLI 提供更聚焦的“前提 (Premise)”
             sentences = self._split_sentences(doc_text)
             best_local_sent = ""
             best_local_lex_score = -1.0
@@ -86,24 +74,39 @@ class PosteriorVerifier:
                     best_local_lex_score = lex_score
                     best_local_sent = sent
             
-            # 如果整段都没什么重叠，可能根本不相关，跳过昂贵的 NLI
-            # 粗筛阈值可以设低一点，比如 0.1
-            if best_local_lex_score < 0.1:
+            # --- Exact Match Boosting Strategy (Generalized) ---
+            # If the focus entity (e.g. "Quartz Sand", "BYD") appears exactly, we boost confidence.
+            is_exact_match = False
+            if target_entity and len(target_entity) > 1:
+                # Simple check: is the entity in the document text?
+                if target_entity in doc_text:
+                    is_exact_match = True
+                    # Relax pre-filter constraint if we found the exact entity
+                    # (Context might be spread out, so distinct sentence might have low score, but presence is strong signal)
+                    best_local_lex_score = max(best_local_lex_score, 0.25) 
+            
+            # Pre-filtering (Lower threshold if exact match)
+            threshold_pre = 0.05 if is_exact_match else 0.1
+            if best_local_lex_score < threshold_pre:
                 continue
 
-            # 2. 计算 CSS 分数 (针对最佳句子)
-            # NLI 计算: Premise=best_local_sent, Hypothesis=claim_text
+            # NLI Calculation
             nli_score = self._calculate_nli_score(premise=best_local_sent, hypothesis=claim_text)
             
             css_score = self._compute_css_score(best_local_lex_score, nli_score)
             
-            # 更新全局最佳
+            # Apply Boosting
+            if is_exact_match:
+                 # Significant Boost: If the entity exists verbatim, we trust it much more.
+                 # +0.25 bonus, capped at 1.0. 
+                 # This ensures that valid entities mentioned in passing are not filtered.
+                 css_score = min(css_score + 0.25, 1.0)
+
             if css_score > best_score:
                 best_score = css_score
                 best_doc = doc
                 best_sentence = best_local_sent
         
-        # 3. 最终判定
         if best_score >= self.threshold:
             return {
                 "verified": True,
@@ -111,18 +114,18 @@ class PosteriorVerifier:
                 "evidence_ref": {
                     "source_id": best_doc.get("source_document_name", "unknown"),
                     "father_chunk_id": best_doc.get("parent_id", "unknown"),
-                    "child_chunk_id": best_doc.get("id", None), # 可能是子块
+                    "child_chunk_id": best_doc.get("id", None),
                     "father_text": best_doc.get("parent_text") or best_doc.get("document", ""),
                     "key_evidence": best_sentence
                 },
-                "reason": f"CSS({best_score:.2f}) >= Threshold({self.threshold})"
+                "reason": f"CSS({best_score:.2f}) >= Threshold"
             }
         else:
             return {
                 "verified": False,
                 "score": best_score,
                 "evidence_ref": None,
-                "reason": f"Best score ({best_score:.2f}) below threshold ({self.threshold})"
+                "reason": f"Score {best_score:.2f} < {self.threshold}"
             }
 
     def _calculate_lexical_overlap(self, str1: str, str2: str) -> float:

@@ -88,12 +88,20 @@ class QueryBuilderAgent(BaseAgent):
             logger.error(f"[{self.agent_name}] 查询生成过程出错: {e}", exc_info=True)
             return self._fallback_queries(node_name, user_topic)
 
-    def _fallback_queries(self, node_name: str, user_topic: str) -> Dict[str, List[str]]:
         """
         当 LLM 生成失败时的回退策略。
+        Optimization: Explicitly add company-related terms.
         """
         logger.info(f"[{self.agent_name}] 使用回退查询策略。")
         return {
-            "vector_queries": [f"{user_topic} {node_name} 定义与描述", f"{node_name} 的上下游关系"],
-            "bm25_queries": [node_name]
+            "vector_queries": [
+                f"{user_topic} {node_name} 定义与描述", 
+                f"{node_name} 的上下游关系",
+                f"{node_name} 行业代表性企业及龙头公司"
+            ],
+            "bm25_queries": [
+                node_name, 
+                f"{node_name}企业", 
+                f"{node_name}上市公司"
+            ]
         }

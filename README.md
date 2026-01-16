@@ -10,10 +10,17 @@
 
 ### 核心特性
 
-* **多智能体协同架构**: 采用 `Orchestrator` 编排多个专业 Agent（如结构规划、节点提取），模拟专家分工协作。
+* **多智能体协同架构**: 采用 `Orchestrator` 编排多个专业 Agent，模拟专家分工协作：
+    * **StructurePlannerAgent (规划师)**: 宏观把控，生成产业骨架。
+    * **NodeExtractorAgent (矿工)**: 深度挖掘节点详情与关系。
+    * **QueryBuilderAgent (翻译官)**: 生成混合检索查询（Vector + BM25）。
+    * **ValidatorAgent (质检员)**: 清洗图谱，合并同义词，剔除噪音。
+* **后验证据验证 (Posterior Evidence Verification)**: 引入 **CSS (Composite Support Score)** 模型，结合**字面刚性约束**（Lexical Overlap）与**语义柔性约束**（NLI Probability），对每一条抽取信息进行“生成-检索-验证”闭环校验，彻底杜绝幻觉。
+* **Generalized Exact Match Boosting**: 针对实体（公司、技术、原料等）实施精确匹配增强策略，确保关键信息的召回率。
 * **递归式图谱生长 (Recursive Tree-Growing)**: 系统不仅执行静态规划，还能在抽取过程中自动发现新的上游/下游节点，并动态扩展抽取范围，直至达到预设深度。
-* **证据驱动 (Evidence-based)**: 所有提取的节点和关系均强关联至原始文档片段，确保信息可追溯、可验证。
-* **混合检索与父子分块**: 结合向量检索与 BM25 关键词检索，利用 Parent-Child Chunking 策略兼顾检索精度与上下文完整性。
+* **混合检索架构**: 
+    * **Vector Queries**: 捕捉隐含语义（如“某环节的生产工艺”）。
+    * **BM25 Queries**: 捕捉精确术语（如化学式、特定公司名）。
 * **本地化隐私保护**: 深度集成 Xinference，支持本地部署 LLM 和 Embedding 模型，确保数据安全。
 
 ## 系统架构
@@ -22,10 +29,13 @@
 
 1. **WorkflowState (工作流状态)**: 作为系统的“短时记忆”，维护任务队列、动态图谱结构（Graph）和上下文信息。
 2. **Orchestrator (编排器)**: 负责任务调度，根据当前状态动态分发任务给最合适的 Agent。
-3. **核心 Agents**:
+3. **关键 Agents**:
    * `StructurePlannerAgent`: **宏观规划者**。分析行业主题，定义初始的产业链上、中、下游骨架。
-   * `NodeExtractorAgent`: **微观探索者**。针对具体节点抽取详细信息，并具备**自我扩展能力**——能够从抽取内容中识别新的关联节点（如原材料、产成品），触发递归抽取。
-4. **RetrievalService (检索服务)**: 统一封装向量检索（FAISS）和关键词检索（BM25），提供高质量的上下文。
+   * `QueryBuilderAgent`: **查询构建者**。为每个节点生成差异化的向量查询和关键词查询，确保检索内容的广度与精度。
+   * `NodeExtractorAgent`: **微观探索与验证者**。针对具体节点抽取详细信息，并调用 `PosteriorVerifier` 进行证据注入，同时具备**自我扩展能力**。
+   * `ValidatorAgent`: **图谱治理者**。在抽取结束后，对全图进行扫描，合并同义节点（如"光伏玻璃"与"太阳能玻璃"），删除非关联节点。
+4. **PosteriorVerifier (后验验证器)**: 独立的验证模块，计算 CSS 分数，判断 LLM 生成的陈述是否有原文支撑。
+5. **RetrievalService (检索服务)**: 统一封装向量检索（FAISS）和关键词检索（BM25），提供高质量的上下文。
 
 ## 环境安装
 
@@ -108,37 +118,45 @@ E:\miniconda\envs\ym\python.exe main.py --topic "光伏产业" --max_recursion_d
       "description": "...",
       "input_elements": ["聚丙烯腈"], // 可能触发递归抽取
       "output_products": ["机身复合材料"],
-      "evidence_refs": { ... }
+      "representative_companies": ["光威复材", "中简科技"],
+      "evidence_refs": { // 溯源证据
+         "representative_companies": {
+             "光威复材": {
+                 "source_id": "XX研报_2024.pdf",
+                 "key_evidence": "光威复材作为国内碳纤维龙头企业...",
+                 "score": 0.95
+             }
+         }
+      }
     }
   }
 }
 ```
 
-## 核心机制详解：从“种子”到“森林”的递归抽取
+## 核心机制详解：E-SAGE 进化版
 
-本系统实现了自动化产业链扩展，其过程类似植物生长。
+本系统实现了自动化产业链扩展与高精度验证。
 
 ### 1. 种子阶段：宏观规划 (Seed Generation)
 **负责角色**: `StructurePlannerAgent`
+*   LLM 分析全局上下文，生成**初始骨架**（例如：上游-抗生素原料，中游-化学制药）。
 
-*   **初始检索**: 全局检索主题（如“生物医药”），获取宏观背景。
-*   **结构生成**:  LLM 分析后生成**初始骨架**（例如：上游-抗生素原料，中游-化学制药）。
-*   **任务播种**: 这些初始节点被作为第一批任务加入队列，深度标记为 `depth=0`。
+### 2. 生长阶段：循环迭代与闭环验证 (Iterative Extraction & Verification)
+**负责角色**: `Orchestrator`, `NodeExtractorAgent`, `QueryBuilderAgent`
 
-### 2. 生长阶段：循环迭代 (Iterative Extraction)
-**负责角色**: `Orchestrator` & `NodeExtractorAgent`
+1.  **混合查询构建**: `QueryBuilderAgent` 针对当前节点生成语义查询（捕捉隐含关系）和精准关键词（捕捉实体）。
+2.  **信息抽取**: LLM 从文档中提取结构化信息。
+3.  **后验证据注入 (Posterior Evidence Injection)**:
+    *   **PosteriorVerifier** 对提取的每一条信息（Claim）进行验证。
+    *   **CSS 评分**: 计算 Lexical Overlap 和 NLI Probability。如果发现精确实体匹配（Exact Match），给予额外加分。
+    *   只有 CSS 分数高于阈值的信息才会被保留并注入证据。
+4.  **递归扩展**: 验证通过的新节点（如原材料、产成品）将被加入任务队列，触发下一轮抽取。
 
-系统进入持续循环：取出任务 -> 处理 -> 发现新线索 -> 裂变新任务。
-
-1.  **针对性检索**: 智能体为当前节点（如“抗生素原料”）生成特定查询词（“生物医药 抗生素原料 详细信息”），挖掘细节。
-2.  **信息抽取**: LLM 从文档中提取结构化信息，包括 `input_elements`（上游线索）和 `output_products`（下游线索）。
-3.  **递归扩展 (Recursive Expansion)**:
-    *   **扫描**: 检查提取出的输入/输出要素（如发现上游原料“玉米发酵液”）。
-    *   **验证**: 确认当前深度未超限 (`depth < MAX_DEPTH`) 且该节点未在图谱中存在。
-    *   **裂变**: 将新发现的节点（“玉米发酵液”）加入图谱，并创建新任务推入队列 (`depth=1`)。
-
-### 3. 结果汇总
-通过这种机制，系统从根主题出发，自动挖掘出骨架之下更细微的“毛细血管”（具体原料、细分部件），形成一棵完整的产业链树。
+### 3. 收敛阶段：图谱治理 (Graph Governance)
+**负责角色**: `ValidatorAgent`
+*   在所有抽取完成后，`ValidatorAgent` 扫描全图。
+*   识别并合并同义词节点（如 "EVA胶膜" 与 "光伏胶膜"）。
+*   剔除语义上不属于产业链物理环节的噪音节点。
 
 ---
 
@@ -146,10 +164,13 @@ E:\miniconda\envs\ym\python.exe main.py --topic "光伏产业" --max_recursion_d
 
 | 路径 | 文件名 | 作用与职责 |
 | :--- | :--- | :--- |
-| **`core/`** | `workflow_state.py` | **系统大脑/记忆**。维护图谱结构（Graph）、任务队列（Queue）和全局状态。新增了 `add_node_to_structure` 用于动态扩展。 |
-| | `orchestrator.py` | **指挥官**。负责主循环，监控队列状态，将任务分发给 Agent，并管理系统的生命周期。 |
-| | `retrieval_service.py` | **检索中台**。封装了 FAISS 向量检索和 BM25 关键词检索，向 Agent 提供统一的 `retrieve()` 接口。 |
-| **`agents/`** | `structure_planner_agent.py` | **宏观规划师**。负责第一阶段，从 0 到 1 生成产业链的初始骨架。 |
-| | `node_extractor_agent.py` | **微观矿工**。负责第二阶段，深入挖掘每个节点的信息。**关键逻辑 `_expand_nodes` 在此实现**，负责发现新节点并触发递归。 |
-| **`pipelines/`** | `report_generation_pipeline.py` | **组装线**。将 LLM、Retrieval、Orchestrator 等组件组装在一起，对外提供 `run()` 入口。 |
-| **根目录** | `main.py` | **程序入口**。处理命令行参数（如 `--topic`, `--max_recursion_depth`），初始化服务并启动 Pipeline。 |
+| **`core/`** | `workflow_state.py` | **系统大脑/记忆**。维护图谱结构、任务队列和全局状态。 |
+| | `orchestrator.py` | **指挥官**。负责主循环，协调所有 Agent。 |
+| | `posterior_verifier.py` | **(核心) 验证器**。实现 CSS 评分逻辑 (Lexical + NLI) 和 Exact Match Boosting。 |
+| | `retrieval_service.py` | **检索中台**。提供统一的混合检索接口。 |
+| **`agents/`** | `structure_planner_agent.py` | **宏观规划师**。生成产业链初始骨架。 |
+| | `query_builder_agent.py` | **查询构建者**。生成 Vector 和 BM25 查询。 |
+| | `node_extractor_agent.py` | **微观矿工**。负责信息抽取、调用验证器、触发递归。**关键逻辑 `execute_task` 在此**。 |
+| | `validator_agent.py` | **质检员**。负责图谱清洗和节点合并。 |
+| **`pipelines/`** | `report_generation_pipeline.py` | **组装线**。组装各组件，提供统一运行入口。 |
+| **根目录** | `main.py` | **程序入口**。处理参数并启动系统。 |

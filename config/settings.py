@@ -88,8 +88,8 @@ DEFAULT_GLOBAL_RETRIEVAL_TOP_N_PER_CHAPTER = int(os.getenv("DEFAULT_GLOBAL_RETRI
 # ==============================================================================
 # CSS (Composite Support Score) = Alpha * Lexical + Beta * NLI
 # 计算公式：Score = Alpha * LexicalOverlap + Beta * NLI_Probability
-POSTERIOR_VERIFIER_ALPHA = float(os.getenv("POSTERIOR_VERIFIER_ALPHA", "0.4")) # 字面刚性约束权重 (防止实体胡编)
-POSTERIOR_VERIFIER_BETA = float(os.getenv("POSTERIOR_VERIFIER_BETA", "0.6"))   # 语义柔性约束权重 (确保逻辑支撑)
+POSTERIOR_VERIFIER_ALPHA = float(os.getenv("POSTERIOR_VERIFIER_ALPHA", "0.6")) # 字面刚性约束权重 (防止实体胡编)
+POSTERIOR_VERIFIER_BETA = float(os.getenv("POSTERIOR_VERIFIER_BETA", "0.4"))   # 语义柔性约束权重 (确保逻辑支撑)
 POSTERIOR_VERIFIER_THRESHOLD = float(os.getenv("POSTERIOR_VERIFIER_THRESHOLD", "0.6")) # 验证通过的最小 CSS 分数阈值
 POSTERIOR_VERIFIER_EPSILON = 1e-6 # 防止分母为零的小数
 
@@ -110,9 +110,9 @@ DEFAULT_QUERY_BUILDER_PROMPT = """你是一个专业的搜索查询构建专家�
 
 2. **bm25_queries (基于关键词的精确匹配)**:
    - 目标：捕捉专有名词、特定型号、化学式或行业术语。
-   - 形式：关键词列表，尽量使用行业内特定的实体名。
+   - 形式：关键词列表，尽量使用行业内特定的实体名，以及**包含“企业”、“公司”、“上市公司”、“龙头”等后缀的查询**。
    - 数量：3-5条。
-   - 示例："光伏玻璃"、"超白压延玻璃"、"PV Glass"、"TCO玻璃"。
+   - 示例："光伏玻璃"、"超白压延玻璃"、"光伏玻璃企业"、"光伏玻璃龙头股"。
 
 输出必须是严格的 JSON 格式：
 {{
@@ -224,7 +224,7 @@ NODE_EXTRACTOR_PROMPT = """你是一个产业数据抽取助手。你的任务�
 2. input_elements: 该环节的关键投入要素（如原材料、零部件、上游设备）。返回列表。
 3. output_products: 该环节的关键产出（如产品、服务、中间件）。返回列表。
 4. key_technologies: 该环节涉及的关键工艺或技术关键词。返回列表。
-5. representative_companies: 该环节的国内外代表性企业。返回列表。
+5. representative_companies: 该环节的国内外代表性企业。返回列表。**请尽可能多地列出文中明确提及的企业名称，不要遗漏。**
 6. description: 对该环节的简短描述（50字以内）。
 
 输出要求：
@@ -238,7 +238,7 @@ JSON输出格式：
   "input_elements": ["投入1", "投入2"],
   "output_products": ["产出1", "产出2"],
   "key_technologies": ["技术1", "技术2"],
-  "representative_companies": ["企业A", "企业B"],
+  "representative_companies": ["企业A", "企业B", "企业C"],
   "description": "简短描述..."
 }}
 """

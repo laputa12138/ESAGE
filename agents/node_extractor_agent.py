@@ -96,48 +96,58 @@ class NodeExtractorAgent(BaseAgent):
             logger.info(f"[{self.agent_name}] Retrieved {len(retrieved_docs)} docs for extraction.")
 
             # --- Step 3: Candidate Extraction (LLM) ---
-            # 这一步只负责“生成”，不负责“溯源”。LLM 专注于提取内容。
             prompt = self.prompt_template.format(
                 node_name=node_name,
                 retrieved_content=context_text
             )
 
-            # 调用 LLM
-            logger.info(f"[{self.agent_name}] 正在调用 LLM 进行信息抽取...")
+            # 调用 LLM (Log simplified)
+            logger.info(f"[{self.agent_name}] 正在调用 LLM 进行信息抽取 (Docs: {len(retrieved_docs)})...")
+            logger.debug(f"Extraction Prompt for {node_name}: {prompt[:200]}...") # Log full prompt only in DEBUG
+
             raw_response = self.llm_service.chat(
                 query=prompt,
-                system_prompt="你是一个精准的数据抽取助手。" # Localized System Prompt
+                system_prompt="你是一个精准的数据抽取助手。"
             )
 
             # 解析 JSON
             extracted_data = clean_and_parse_json(raw_response, context=f"extraction_{node_name}")
             
-            # Handling edge case where LLM returns a list instead of a dict
+            # Handling edge case where LLM returns a list
             if isinstance(extracted_data, list):
                 if extracted_data and isinstance(extracted_data[0], dict):
-                    logger.warning(f"[{self.agent_name}] Parsed JSON is a list, taking the first item for {node_name}.")
                     extracted_data = extracted_data[0]
                 else:
-                    logger.warning(f"[{self.agent_name}] Parsed JSON is a list but empty or invalid content for {node_name}. Treating as failure.")
                     extracted_data = None
 
+            # JSON Parsing Failure Handling
             if not extracted_data or not isinstance(extracted_data, dict):
-                logger.warning(f"[{self.agent_name}] 无法为 {node_name} 解析 JSON 或格式不正确。保存空记录。")
+                logger.error(f"[{self.agent_name}] 无法为 {node_name} 解析 JSON。保存原始输出以供调试。")
                 extracted_data = {
                     "entity_name": node_name,
-                    "description": "抽取失败或无数据。",
-                    "error": "JSON parse error or invalid format"
+                    "description": "JSON 解析失败",
+                    "_raw_llm_output": raw_response, # User requirement: Keep raw output
+                    "error": "JSON parse error"
                 }
             else:
-                # 4.1 溯源匹配 (Source Tracing & Evidence Matching)
-                # 只有成功解析且非空时才进行匹配
+                # 4.1 Check for Empty Node (All fields empty)
+                # If only entity_name is present, treat as empty
+                meaningful_keys = ['input_elements', 'output_products', 'key_technologies', 'representative_companies', 'description']
+                has_content = any(extracted_data.get(k) and str(extracted_data.get(k)).strip() for k in meaningful_keys)
+                
+                if not has_content:
+                    logger.warning(f"[{self.agent_name}] 节点 '{node_name}' 抽取结果为空 (无实质信息)。跳过保存。")
+                    if task_id: workflow_state.complete_task(task_id, f"节点 '{node_name}' 无有效信息，已忽略。", status='success')
+                    return # Skip saving and recursion
+
+                # 4.2 溯源匹配 (Source Tracing & Evidence Matching)
                 try:
                     logger.info(f"[{self.agent_name}] 正在为节点 '{node_name}' 进行溯源匹配...")
                     extracted_data = self._match_evidence(node_name, extracted_data, retrieved_docs)
                 except Exception as e:
-                    logger.error(f"[{self.agent_name}] 溯源匹配过程中发生错误: {e}", exc_info=True)
-                    # 即使匹配失败，也保留原始提取数据，避免任务完全失败
+                    logger.error(f"[{self.agent_name}] 溯源匹配错误: {e}", exc_info=True)
                     extracted_data['source_tracing_error'] = str(e)
+
 
             # 5. Expand Graph (Recursive Extraction)
             if current_depth < max_depth:
@@ -193,9 +203,10 @@ class NodeExtractorAgent(BaseAgent):
                 if field == 'representative_companies':
                     claim = f"{item}是{node_name}环节的代表性企业。"
                 
-                # 调用 PosteriorVerifier 进行验证
-                # verify_claim 返回 {verified, score, evidence_ref, reason}
-                verify_result = self.verifier.verify_claim(claim, retrieved_docs)
+                # 4.3.2 验证 (Posterior Verification)
+                # 调用 PosteriorVerifier 计算 CSS 分数 + NLI 验证
+                # Optimization (Phase 3): Pass 'item' as focus_entity for Exact Match Boosting
+                verify_result = self.verifier.verify_claim(claim, retrieved_docs, focus_entity=item)
                 
                 if verify_result['verified']:
                     verified_items.append(item)
