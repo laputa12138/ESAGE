@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 # Define task type constants
 TASK_TYPE_PLAN_STRUCTURE = "plan_structure"
 TASK_TYPE_EXTRACT_NODE = "extract_node"
+TASK_TYPE_VALIDATE_GRAPH = "validate_graph"
 
 # Define node status constants (if needed, though simple None check works)
 STATUS_PENDING = "pending"
@@ -253,6 +254,84 @@ class WorkflowState:
     def increment_error_count(self):
         self.error_count += 1
         self.log_event("Global error count incremented.", {"current_error_count": self.error_count})
+
+    def remove_node(self, node_name: str) -> bool:
+        """
+        Removes a node from both the structure (graph) and node_details.
+        Returns True if successful, False if node not found.
+        """
+        removed = False
+        
+        # 1. Remove from structure lists
+        for category in ['upstream', 'midstream', 'downstream']:
+            if node_name in self.industry_graph['structure'].get(category, []):
+                self.industry_graph['structure'][category].remove(node_name)
+                removed = True
+        
+        # 2. Remove from node_details
+        if node_name in self.industry_graph['node_details']:
+            del self.industry_graph['node_details'][node_name]
+            removed = True
+
+        if removed:
+            self.log_event(f"Node removed: {node_name}")
+            return True
+        return False
+
+    def merge_nodes(self, keep_name: str, drop_name: str) -> bool:
+        """
+        Merges 'drop_name' into 'keep_name'. 
+        - Moves any unique extraction details from drop_name to keep_name (simple strategy).
+        - Removes drop_name from structure.
+        - Updates references (if any linked logic existed, though currently graph is implicit).
+        """
+        if drop_name not in self.industry_graph['node_details']:
+            return False
+            
+        # Ensure keep_name exists (if not, maybe rename? assuming keep_name exists for now)
+        if keep_name not in self.industry_graph['node_details']:
+             self.log_event(f"Merge target '{keep_name}' does not exist. Initializing it.")
+             # Try to find category of drop_name to assign to keep_name
+             found_cat = 'upstream' # default
+             for cat in ['upstream', 'midstream', 'downstream']:
+                 if drop_name in self.industry_graph['structure'].get(cat, []):
+                     found_cat = cat
+                     break
+             self.add_node_to_structure(keep_name, found_cat)
+
+        # Merge Details Logic
+        # Strategy: Prefer keep_name's details. If keep_name's details are empty/None, take drop_name's.
+        # If both have details, maybe merge lists (e.g. input_elements)?
+        # For V1: Simple "Fill if empty" + "Merge Evidence"
+        
+        keep_data = self.industry_graph['node_details'].get(keep_name)
+        drop_data = self.industry_graph['node_details'].get(drop_name)
+
+        if not keep_data and drop_data:
+            # Full copy if target is empty
+            self.industry_graph['node_details'][keep_name] = drop_data
+            # Update entity_name in the data
+            if isinstance(drop_data, dict):
+                self.industry_graph['node_details'][keep_name]['entity_name'] = keep_name
+        
+        elif keep_data and drop_data and isinstance(keep_data, dict) and isinstance(drop_data, dict):
+            # Intelligent Merge for lists
+            for list_key in ['input_elements', 'output_products', 'key_technologies', 'representative_companies']:
+                if list_key in drop_data and isinstance(drop_data[list_key], list):
+                    existing = set(keep_data.get(list_key, []))
+                    for item in drop_data[list_key]:
+                        if item not in existing:
+                            keep_data.setdefault(list_key, []).append(item)
+            
+            # Merge Evidence (Simple append)
+            if 'evidence_refs' in drop_data:
+                keep_data.setdefault('evidence_refs', {}).update(drop_data['evidence_refs'])
+        
+        self.log_event(f"Merged node '{drop_name}' into '{keep_name}'.")
+        
+        # Remove the dropped node
+        self.remove_node(drop_name)
+        return True
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)

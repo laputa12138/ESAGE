@@ -81,6 +81,7 @@ class RetrievalService:
 
     def retrieve(self,
                  query_texts: List[str],
+                 bm25_query_texts: Optional[List[str]] = None,
                  vector_top_k: int = settings.DEFAULT_VECTOR_STORE_TOP_K,
                  keyword_top_k: int = settings.DEFAULT_KEYWORD_SEARCH_TOP_K,
                  # hybrid_alpha: float = settings.DEFAULT_HYBRID_SEARCH_ALPHA, # Removed as per new logic
@@ -112,57 +113,105 @@ class RetrievalService:
         # --- 1. Gather results from Vector Search and Keyword Search for all queries ---
         all_retrieved_child_chunks: Dict[str, Dict[str, Any]] = {} # child_id -> data
 
-        for query_idx, query_text in enumerate(query_texts):
-            logger.debug(f"Processing query {query_idx + 1}/{len(query_texts)}: '{query_text[:100]}...'")
-
-            # Vector Search
-            try:
-                raw_vector_hits = self.vector_store.search(query_text=query_text, k=vector_top_k)
-                for hit in raw_vector_hits:
-                    child_id = hit['child_id']
-                    if child_id not in all_retrieved_child_chunks:
-                        all_retrieved_child_chunks[child_id] = {
-                            **hit, # Includes child_id, parent_id, parent_text, child_text, source_document_name
-                            'retrieval_source_types': {'vector'} # Store how it was found
-                        }
-                    else: # Already found, just add the source type
-                        all_retrieved_child_chunks[child_id]['retrieval_source_types'].add('vector')
-                logger.debug(f"Query '{query_text[:30]}...': Vector search added/updated {len(raw_vector_hits)} potential chunks.")
-            except VectorStoreError as e:
-                logger.error(f"VectorStore search failed for query '{query_text[:30]}...': {e}")
-            except Exception as e:
-                logger.error(f"Unexpected error during vector search for query '{query_text[:30]}...': {e}", exc_info=True)
-
-            # Keyword Search (BM25)
-            if self.bm25_index and self.all_child_chunks_for_bm25_mapping:
-                try:
-                    tokenized_query = self._tokenize_query(query_text)
-                    bm25_doc_scores = self.bm25_index.get_scores(tokenized_query)
-                    num_bm25_candidates = min(keyword_top_k, len(self.all_child_chunks_for_bm25_mapping))
-                    top_bm25_indices = np.argsort(bm25_doc_scores)[::-1][:num_bm25_candidates]
-
-                    keyword_hits_count = 0
-                    for doc_idx in top_bm25_indices:
-                        # We don't use BM25 scores directly for ranking anymore, just for candidate selection.
-                        # A minimal score check might be useful if BM25 scores are very low, but for now, take top_k.
-                        child_meta = self.all_child_chunks_for_bm25_mapping[doc_idx]
-                        child_id = child_meta['child_id']
-                        full_context = self.child_id_to_full_context_map.get(child_id)
-                        if not full_context:
-                            logger.warning(f"Query '{query_text[:30]}...': BM25 found child_id '{child_id}' but no full context mapping. Skipping.")
-                            continue
-
-                        keyword_hits_count += 1
+        if bm25_query_texts is not None:
+             # --- Mode A: Separated Queries (New Logic) ---
+             # 1. Vector Search using query_texts
+             for query_text in query_texts:
+                 try:
+                    raw_vector_hits = self.vector_store.search(query_text=query_text, k=vector_top_k)
+                    for hit in raw_vector_hits:
+                        child_id = hit['child_id']
                         if child_id not in all_retrieved_child_chunks:
                             all_retrieved_child_chunks[child_id] = {
-                                **full_context, # Includes child_id, parent_id, parent_text, child_text, source_document_name
-                                'retrieval_source_types': {'keyword'}
+                                **hit,
+                                'retrieval_source_types': {'vector'}
                             }
                         else:
-                            all_retrieved_child_chunks[child_id]['retrieval_source_types'].add('keyword')
-                    logger.debug(f"Query '{query_text[:30]}...': Keyword (BM25) added/updated {keyword_hits_count} potential chunks.")
+                            all_retrieved_child_chunks[child_id]['retrieval_source_types'].add('vector')
+                 except Exception as e:
+                    logger.error(f"Vector search failed for '{query_text[:30]}...': {e}")
+             
+             # 2. Keyword Search using bm25_query_texts
+             if self.bm25_index and self.all_child_chunks_for_bm25_mapping:
+                 for bm25_q in bm25_query_texts:
+                     try:
+                        tokenized_query = self._tokenize_query(bm25_q)
+                        bm25_doc_scores = self.bm25_index.get_scores(tokenized_query)
+                        num_bm25_candidates = min(keyword_top_k, len(self.all_child_chunks_for_bm25_mapping))
+                        # Optimization: if num_bm25_candidates is 0, skip
+                        if num_bm25_candidates > 0:
+                            # argsort is expensive for large corpus, but acceptable for now
+                            top_bm25_indices = np.argsort(bm25_doc_scores)[::-1][:num_bm25_candidates]
+                            
+                            for doc_idx in top_bm25_indices:
+                                child_meta = self.all_child_chunks_for_bm25_mapping[doc_idx]
+                                child_id = child_meta['child_id']
+                                full_context = self.child_id_to_full_context_map.get(child_id)
+                                if not full_context: continue
+                                
+                                if child_id not in all_retrieved_child_chunks:
+                                    all_retrieved_child_chunks[child_id] = {
+                                        **full_context,
+                                        'retrieval_source_types': {'keyword'}
+                                    }
+                                else:
+                                    all_retrieved_child_chunks[child_id]['retrieval_source_types'].add('keyword')
+                     except Exception as e:
+                        logger.error(f"BM25 search failed for '{bm25_q[:30]}...': {e}")
+
+        else:
+            # --- Mode B: Combined Queries (Legacy Logic) ---
+            for query_idx, query_text in enumerate(query_texts):
+                logger.debug(f"Processing query {query_idx + 1}/{len(query_texts)}: '{query_text[:100]}...'")
+
+                # Vector Search
+                try:
+                    raw_vector_hits = self.vector_store.search(query_text=query_text, k=vector_top_k)
+                    for hit in raw_vector_hits:
+                        child_id = hit['child_id']
+                        if child_id not in all_retrieved_child_chunks:
+                            all_retrieved_child_chunks[child_id] = {
+                                **hit, # Includes child_id, parent_id, parent_text, child_text, source_document_name
+                                'retrieval_source_types': {'vector'} # Store how it was found
+                            }
+                        else: # Already found, just add the source type
+                            all_retrieved_child_chunks[child_id]['retrieval_source_types'].add('vector')
+                    logger.debug(f"Query '{query_text[:30]}...': Vector search added/updated {len(raw_vector_hits)} potential chunks.")
+                except VectorStoreError as e:
+                    logger.error(f"VectorStore search failed for query '{query_text[:30]}...': {e}")
                 except Exception as e:
-                    logger.error(f"Keyword search (BM25) failed for query '{query_text[:30]}...': {e}", exc_info=True)
+                    logger.error(f"Unexpected error during vector search for query '{query_text[:30]}...': {e}", exc_info=True)
+
+                # Keyword Search (BM25)
+                if self.bm25_index and self.all_child_chunks_for_bm25_mapping:
+                    try:
+                        tokenized_query = self._tokenize_query(query_text)
+                        bm25_doc_scores = self.bm25_index.get_scores(tokenized_query)
+                        num_bm25_candidates = min(keyword_top_k, len(self.all_child_chunks_for_bm25_mapping))
+                        top_bm25_indices = np.argsort(bm25_doc_scores)[::-1][:num_bm25_candidates]
+
+                        keyword_hits_count = 0
+                        for doc_idx in top_bm25_indices:
+                            # We don't use BM25 scores directly for ranking anymore, just for candidate selection.
+                            # A minimal score check might be useful if BM25 scores are very low, but for now, take top_k.
+                            child_meta = self.all_child_chunks_for_bm25_mapping[doc_idx]
+                            child_id = child_meta['child_id']
+                            full_context = self.child_id_to_full_context_map.get(child_id)
+                            if not full_context:
+                                logger.warning(f"Query '{query_text[:30]}...': BM25 found child_id '{child_id}' but no full context mapping. Skipping.")
+                                continue
+
+                            keyword_hits_count += 1
+                            if child_id not in all_retrieved_child_chunks:
+                                all_retrieved_child_chunks[child_id] = {
+                                    **full_context, # Includes child_id, parent_id, parent_text, child_text, source_document_name
+                                    'retrieval_source_types': {'keyword'}
+                                }
+                            else:
+                                all_retrieved_child_chunks[child_id]['retrieval_source_types'].add('keyword')
+                        logger.debug(f"Query '{query_text[:30]}...': Keyword (BM25) added/updated {keyword_hits_count} potential chunks.")
+                    except Exception as e:
+                        logger.error(f"Keyword search (BM25) failed for query '{query_text[:30]}...': {e}", exc_info=True)
 
         # Combined list of unique child chunks for reranking
         unique_child_chunks_for_reranking = list(all_retrieved_child_chunks.values())

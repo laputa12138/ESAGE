@@ -16,6 +16,7 @@ from core.orchestrator import Orchestrator
 
 from agents.structure_planner_agent import StructurePlannerAgent
 from agents.node_extractor_agent import NodeExtractorAgent
+from agents.validator_agent import ValidatorAgent
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ class ReportGenerationPipeline:
         # Agents
         self.structure_planner: Optional[StructurePlannerAgent] = None
         self.node_extractor: Optional[NodeExtractorAgent] = None
+        self.validator_agent: Optional[ValidatorAgent] = None
 
         logger.info("IndustryExtractionPipeline (named ReportGenerationPipeline) initialized.")
 
@@ -107,6 +109,11 @@ class ReportGenerationPipeline:
                 llm_service=self.llm_service,
                 retrieval_service=self.retrieval_service
             )
+            
+        if not self.validator_agent:
+            self.validator_agent = ValidatorAgent(
+                llm_service=self.llm_service
+            )
 
         # Initialize Orchestrator
         if not self.orchestrator:
@@ -114,6 +121,7 @@ class ReportGenerationPipeline:
                 workflow_state=self.workflow_state,
                 structure_planner=self.structure_planner,
                 node_extractor=self.node_extractor,
+                validator_agent=self.validator_agent,
                 max_workflow_iterations=self.max_workflow_iterations
             )
             self.workflow_state.log_event("Orchestrator initialized.")

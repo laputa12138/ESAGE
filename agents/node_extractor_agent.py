@@ -4,10 +4,11 @@ import json_repair
 from typing import Dict, Optional, List, Any
 
 from agents.base_agent import BaseAgent
+from agents.query_builder_agent import QueryBuilderAgent
 from core.llm_service import LLMService, LLMServiceError
 from core.retrieval_service import RetrievalService, RetrievalServiceError
 from core.workflow_state import WorkflowState, TASK_TYPE_EXTRACT_NODE
-from config import settings as app_settings
+from config import settings
 from core.json_utils import clean_and_parse_json
 
 from core.posterior_verifier import PosteriorVerifier
@@ -32,12 +33,17 @@ class NodeExtractorAgent(BaseAgent):
         self.retrieval_service = retrieval_service
         
         # Initialize PosteriorVerifier if reranker is available
+        # This part is now handled by the new self.verifier, but keeping for potential future use or if reranker is used elsewhere.
         self.posterior_verifier = None
         if hasattr(self.retrieval_service, 'reranker_service') and self.retrieval_service.reranker_service:
             self.posterior_verifier = PosteriorVerifier(self.retrieval_service.reranker_service)
         else:
             logger.warning(f"[{self.agent_name}] RerankerService missing, PosteriorVerifier disabled.")
-        self.prompt_template = prompt_template or app_settings.NODE_EXTRACTOR_PROMPT
+        self.prompt_template = prompt_template or settings.NODE_EXTRACTOR_PROMPT
+        
+        # Phase 2 Components
+        self.query_builder = QueryBuilderAgent(llm_service)
+        self.verifier = PosteriorVerifier(llm_service) # Logic now in verifier
         
         if not self.llm_service:
             raise NodeExtractorAgentError("需要 LLMService。")
@@ -46,10 +52,13 @@ class NodeExtractorAgent(BaseAgent):
         if not self.prompt_template:
             raise NodeExtractorAgentError("需要 Prompt 模板。")
 
-    def execute_task(self, workflow_state: WorkflowState, task_payload: Dict) -> None:
+    def execute_task(self, workflow_state: WorkflowState, task: Dict) -> None:
         task_id = workflow_state.current_processing_task_id
-        node_name = task_payload.get('node_name')
-        category = task_payload.get('category', 'unknown')
+        payload = task.get('payload', {})
+        node_name = payload.get('node_name')
+        category = payload.get('category', 'unknown')
+        current_depth = payload.get('depth', 0)
+        max_depth = payload.get('max_depth', 2) # Default limit to prevent infinite loops
         
         logger.info(f"[{self.agent_name}] 开始抽取节点信息: {node_name} (分类: {category})")
         
@@ -60,43 +69,47 @@ class NodeExtractorAgent(BaseAgent):
             raise NodeExtractorAgentError(err_msg)
 
         try:
-            # 1. 检索上下文
             user_topic = workflow_state.user_topic
-            query = f"{user_topic} {node_name} 详细信息" # Localized query
-            
-            logger.info(f"[{self.agent_name}] 正在为节点 '{node_name}' 检索相关文档...")
+
+            # --- Step 1: Query Generation (Query Builder) ---
+            # 使用 QueryBuilder 生成专用的 Vector 和 BM25 查询
+            queries = self.query_builder.generate_queries(node_name, user_topic)
+            vector_queries = queries.get('vector_queries', [])
+            bm25_queries = queries.get('bm25_queries', [])
+
+            # --- Step 2: Hybrid Retrieval (Retrieval Service) ---
+            # 使用分离的查询列表进行检索
             retrieved_docs = self.retrieval_service.retrieve(
-                query_texts=[query, node_name],
-                final_top_n=5 
+                query_texts=vector_queries,
+                bm25_query_texts=bm25_queries,
+                final_top_n=settings.DEFAULT_RETRIEVAL_FINAL_TOP_N
             )
             
-            if not retrieved_docs:
-                logger.warning(f"[{self.agent_name}] 未找到关于 {node_name} 的相关文档。跳过抽取。")
-                # Directly return None/Empty to indicate valid failure to find data
-                # WorkflowState should verify and prune these later.
-                workflow_state.update_node_details(node_name, None) 
-                
-                msg = f"未找到节点 '{node_name}' 的参考文档，已跳过。"
-                if task_id: workflow_state.complete_task(task_id, msg, status='success') # Success in processing, but result is empty
-                return
-            else:
-                context_summary = "\n".join([f"--- Source: {d.get('source_document_name', 'Unknown')} ---\n{d.get('document', '')}" for d in retrieved_docs])
-                logger.info(f"[{self.agent_name}] 检索到 {len(retrieved_docs)} 篇相关文档。")
+            # Format context for LLM extraction
+            context_text = ""
+            for i, doc in enumerate(retrieved_docs):
+                # doc包含 'parent_text' (上下文) 和 'child_text_preview'
+                content = doc.get("parent_text") or doc.get("document", "")
+                source = doc.get("source_document_name", "Unknown")
+                context_text += f"\n[Document {i+1}] (Source: {source})\n{content}\n"
 
-            # 2. 构建 Prompt
-            prompt_formatted = self.prompt_template.format(
+            logger.info(f"[{self.agent_name}] Retrieved {len(retrieved_docs)} docs for extraction.")
+
+            # --- Step 3: Candidate Extraction (LLM) ---
+            # 这一步只负责“生成”，不负责“溯源”。LLM 专注于提取内容。
+            prompt = self.prompt_template.format(
                 node_name=node_name,
-                retrieved_content=context_summary
+                retrieved_content=context_text
             )
 
-            # 3. 调用 LLM
+            # 调用 LLM
             logger.info(f"[{self.agent_name}] 正在调用 LLM 进行信息抽取...")
             raw_response = self.llm_service.chat(
-                query=prompt_formatted,
+                query=prompt,
                 system_prompt="你是一个精准的数据抽取助手。" # Localized System Prompt
             )
 
-            # 4. 解析 JSON
+            # 解析 JSON
             extracted_data = clean_and_parse_json(raw_response, context=f"extraction_{node_name}")
             
             # Handling edge case where LLM returns a list instead of a dict
@@ -120,16 +133,13 @@ class NodeExtractorAgent(BaseAgent):
                 # 只有成功解析且非空时才进行匹配
                 try:
                     logger.info(f"[{self.agent_name}] 正在为节点 '{node_name}' 进行溯源匹配...")
-                    extracted_data = self._match_evidence(extracted_data, retrieved_docs)
+                    extracted_data = self._match_evidence(node_name, extracted_data, retrieved_docs)
                 except Exception as e:
                     logger.error(f"[{self.agent_name}] 溯源匹配过程中发生错误: {e}", exc_info=True)
                     # 即使匹配失败，也保留原始提取数据，避免任务完全失败
                     extracted_data['source_tracing_error'] = str(e)
 
             # 5. Expand Graph (Recursive Extraction)
-            current_depth = task_payload.get('depth', 0)
-            max_depth = task_payload.get('max_depth', 2) # Default limit to prevent infinite loops
-
             if current_depth < max_depth:
                 self._expand_nodes(extracted_data, workflow_state, current_depth, max_depth)
 
@@ -146,13 +156,13 @@ class NodeExtractorAgent(BaseAgent):
             if task_id: workflow_state.complete_task(task_id, err_msg, status='failed')
             raise NodeExtractorAgentError(err_msg) from e
 
-    def _match_evidence(self, extracted_data: Dict[str, Any], retrieved_docs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _match_evidence(self, node_name: str, extracted_data: Dict[str, Any], retrieved_docs: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         使用 PosteriorVerifier 对提取出的每个细节进行严格溯源。
         验证失败的条目将被标记或移除。
         """
-        if not retrieved_docs or not self.posterior_verifier:
-            logger.warning(f"[{self.agent_name}] 无法进行后验溯源 (Docs={len(retrieved_docs)}, Verifier={self.posterior_verifier is not None})")
+        if not retrieved_docs or not self.verifier:
+            logger.warning(f"[{self.agent_name}] 无法进行后验溯源 (Docs={len(retrieved_docs)}, Verifier={self.verifier is not None})")
             return extracted_data
 
         fields_to_trace = [
@@ -162,7 +172,7 @@ class NodeExtractorAgent(BaseAgent):
             "representative_companies"
         ]
         
-        evidence_refs_map = {}
+        evidence_details_map = {} # Parallel map for detailed evidence
         filtered_items_map = {}
         
         for field in fields_to_trace:
@@ -177,19 +187,31 @@ class NodeExtractorAgent(BaseAgent):
                 if not isinstance(item, str) or not item.strip():
                     continue
                     
+                # claim construction: 简单构造陈述句用于验证
+                # e.g., "光伏玻璃的 input_elements 是 石英砂"
+                claim = f"{node_name}的{field}包含{item}。" 
+                if field == 'representative_companies':
+                    claim = f"{item}是{node_name}环节的代表性企业。"
+                
                 # 调用 PosteriorVerifier 进行验证
-                verify_result = self.posterior_verifier.verify_item(item, retrieved_docs)
+                # verify_claim 返回 {verified, score, evidence_ref, reason}
+                verify_result = self.verifier.verify_claim(claim, retrieved_docs)
                 
                 if verify_result['verified']:
                     verified_items.append(item)
-                    evidence_refs_map[item] = verify_result['evidence_refs']
-                    logger.debug(f"[{self.agent_name}] Item verified: '{item}' -> {len(verify_result['evidence_refs'])} evidence(s)")
+                    # Store rich evidence
+                    if field not in evidence_details_map:
+                        evidence_details_map[field] = {}
+                    evidence_details_map[field][item] = verify_result['evidence_ref']
+                    
+                    logger.debug(f"[{self.agent_name}] Item verified: '{item}' (Score: {verify_result['score']:.2f})")
                 else:
-                    reason = verify_result.get('reason', 'Unknown rejection reason')
-                    logger.info(f"[{self.agent_name}] Item REJECTED: '{item}' Reason: {reason}")
+                    reason = verify_result.get('reason', 'Unknown reason')
+                    # logger.info(f"[{self.agent_name}] Item REJECTED: '{item}' Reason: {reason}")
                     filtered_field_items.append({
                         "value": item,
-                        "reason": reason
+                        "reason": reason,
+                        "score": verify_result.get('score', 0.0)
                     })
             
             # Update the list with only verified items
@@ -197,8 +219,20 @@ class NodeExtractorAgent(BaseAgent):
             if filtered_field_items:
                 filtered_items_map[field] = filtered_field_items
 
-        extracted_data['evidence_refs'] = evidence_refs_map
+        extracted_data['evidence_details'] = evidence_details_map
         extracted_data['filtered_items'] = filtered_items_map
+        
+        # Verify Description separately
+        desc = extracted_data.get("description", "")
+        if desc:
+             desc_ver = self.verifier.verify_claim(f"{node_name}的描述: {desc}", retrieved_docs)
+             if desc_ver['verified']:
+                 if 'description' not in evidence_details_map:
+                      evidence_details_map['description'] = {}
+                 # Description is single value, but map expects key. Use 'self' or similar?
+                 # Or just put it directly under description key if consistent
+                 evidence_details_map['description'] = desc_ver['evidence_ref']
+
         return extracted_data
 
     def _expand_nodes(self, extracted_data: Dict[str, Any], workflow_state: WorkflowState, current_depth: int, max_depth: int):

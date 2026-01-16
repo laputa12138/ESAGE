@@ -2,9 +2,10 @@ import logging
 import json
 from typing import Dict, Any, Optional
 
-from core.workflow_state import WorkflowState, TASK_TYPE_PLAN_STRUCTURE, TASK_TYPE_EXTRACT_NODE
+from core.workflow_state import WorkflowState, TASK_TYPE_PLAN_STRUCTURE, TASK_TYPE_EXTRACT_NODE, TASK_TYPE_VALIDATE_GRAPH
 from agents.structure_planner_agent import StructurePlannerAgent
 from agents.node_extractor_agent import NodeExtractorAgent
+from agents.validator_agent import ValidatorAgent
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +22,16 @@ class Orchestrator:
                  workflow_state: WorkflowState,
                  structure_planner: StructurePlannerAgent,
                  node_extractor: NodeExtractorAgent,
+                 validator_agent: Optional[ValidatorAgent] = None,
                  max_workflow_iterations: int = 100,
                 ):
         self.workflow_state = workflow_state
         self.agents = {
             TASK_TYPE_PLAN_STRUCTURE: structure_planner,
-            TASK_TYPE_EXTRACT_NODE: node_extractor
+            TASK_TYPE_EXTRACT_NODE: node_extractor,
+            TASK_TYPE_VALIDATE_GRAPH: validator_agent
         }
+        self.validator_agent = validator_agent
         self.max_workflow_iterations = max_workflow_iterations
         logger.info("编排器初始化完成，已加载结构规划与节点抽取智能体。")
 
@@ -76,8 +80,15 @@ class Orchestrator:
                 
                 # Check completion condition
                 if self.workflow_state.are_all_nodes_extracted():
+                    # Check if validation has been run
+                    if self.validator_agent and not self.workflow_state.get_flag('graph_validated', False):
+                        self.workflow_state.log_event("所有节点抽取完成。触发图谱验证任务。")
+                        self.workflow_state.add_task(TASK_TYPE_VALIDATE_GRAPH, priority=10) # Highest priority
+                        self.workflow_state.set_flag('graph_validated', True) # Prevent infinite validation loop
+                        continue
+                    
                     self.workflow_state.set_flag('extraction_complete', True)
-                    self.workflow_state.log_event("所有节点抽取完成。工作流结束。")
+                    self.workflow_state.log_event("所有节点抽取完成且已验证。工作流结束。")
                     break
                 
                 if stall_patience_counter >= STALL_PATIENCE_THRESHOLD:

@@ -83,6 +83,44 @@ DEFAULT_OUTLINE_GENERATION_RETRIEVAL_TOP_N = int(os.getenv("DEFAULT_OUTLINE_GENE
 # For GlobalContentRetrieverAgent: Number of documents per chapter
 DEFAULT_GLOBAL_RETRIEVAL_TOP_N_PER_CHAPTER = int(os.getenv("DEFAULT_GLOBAL_RETRIEVAL_TOP_N_PER_CHAPTER", "20")) # Reduced default
 
+# ==============================================================================
+# 后验验证器配置 (Posterior Verifier Configuration)
+# ==============================================================================
+# CSS (Composite Support Score) = Alpha * Lexical + Beta * NLI
+# 计算公式：Score = Alpha * LexicalOverlap + Beta * NLI_Probability
+POSTERIOR_VERIFIER_ALPHA = float(os.getenv("POSTERIOR_VERIFIER_ALPHA", "0.4")) # 字面刚性约束权重 (防止实体胡编)
+POSTERIOR_VERIFIER_BETA = float(os.getenv("POSTERIOR_VERIFIER_BETA", "0.6"))   # 语义柔性约束权重 (确保逻辑支撑)
+POSTERIOR_VERIFIER_THRESHOLD = float(os.getenv("POSTERIOR_VERIFIER_THRESHOLD", "0.6")) # 验证通过的最小 CSS 分数阈值
+POSTERIOR_VERIFIER_EPSILON = 1e-6 # 防止分母为零的小数
+
+# ==============================================================================
+# Quert Builder Configuration
+# ==============================================================================
+DEFAULT_QUERY_BUILDER_PROMPT = """你是一个专业的搜索查询构建专家。你的任务是为给定的产业链环节生成两类检索查询，以确保从文档库中召回最相关的内容。
+
+产业链环节名称：'{node_name}'
+行业背景：'{user_topic}'
+
+请生成以下两组查询：
+1. **vector_queries (基于向量的语义检索生成)**:
+   - 目标：捕捉该环节的功能、上下游关系、工艺动作等隐含语义。
+   - 形式：长句或短语，包含动词和描述性词汇。
+   - 数量：3-5条。
+   - 示例："光伏玻璃的生产工艺流程"、"生产太阳能电池组件所需的原材料"、"单晶硅片的上游供应环节"。
+
+2. **bm25_queries (基于关键词的精确匹配)**:
+   - 目标：捕捉专有名词、特定型号、化学式或行业术语。
+   - 形式：关键词列表，尽量使用行业内特定的实体名。
+   - 数量：3-5条。
+   - 示例："光伏玻璃"、"超白压延玻璃"、"PV Glass"、"TCO玻璃"。
+
+输出必须是严格的 JSON 格式：
+{{
+  "vector_queries": ["...", "..."],
+  "bm25_queries": ["...", "..."]
+}}
+"""
+
 # --- Query Generation/Expansion Settings ---
 # Max expanded queries from TopicAnalyzerAgent (LLM prompt also guides this)
 DEFAULT_MAX_EXPANDED_QUERIES_TOPIC = int(os.getenv("DEFAULT_MAX_EXPANDED_QUERIES_TOPIC", "20"))
