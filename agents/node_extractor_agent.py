@@ -239,16 +239,29 @@ class NodeExtractorAgent(BaseAgent):
                                 evidence_details_map[field][item] = {
                                     "source_id": verify_result['evidence_ref']['source_id'],
                                     "key_evidence": verify_result['evidence_ref']['key_evidence'],
-                                    "score": verify_result['score']
+                                    "score": verify_result['score'],
+                                    "father_text": verify_result['evidence_ref'].get('father_text', ""), # Add father_text
+                                    "score_breakdown": verify_result.get('score_breakdown', {}) # Add score breakdown
                                 }
                             logger.debug(f"[{self.agent_name}] Item verified: '{item}' (Score: {verify_result['score']:.2f})")
                         else:
                             reason = verify_result.get('reason', 'Unknown reason')
-                            filtered_field_items.append({
+                            filtered_entry = {
                                 "value": item,
                                 "reason": reason,
-                                "score": verify_result.get('score', 0.0)
-                            })
+                                "score": verify_result.get('score', 0.0),
+                                "score_breakdown": verify_result.get('score_breakdown', {})
+                            }
+                            
+                            # Also include evidence detail for rejected items if available (for manual check)
+                            if verify_result.get('evidence_ref'):
+                                 filtered_entry["evidence_detail"] = {
+                                    "source_id": verify_result['evidence_ref']['source_id'],
+                                    "key_evidence": verify_result['evidence_ref']['key_evidence'],
+                                    "father_text": verify_result['evidence_ref'].get('father_text', "")
+                                 }
+                            
+                            filtered_field_items.append(filtered_entry)
                             logger.debug(f"[Verifier] Rejected '{item}' (Score: {verify_result['score']:.2f})")
 
                     except Exception as exc:

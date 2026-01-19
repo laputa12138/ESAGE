@@ -123,8 +123,16 @@ class TestPosteriorVerification(unittest.TestCase):
         
         # Verify that 'Electricity' is processed (even if verified or not)
         # In this mock setup, we didn't add doc for Electricity so it might be missing or filtered.
+        # The mock LLM now returns the new fields, so we can assert on them for 'High Purity Silicon'
+        self.assertIn('score_breakdown', silicon_evidence)
+        self.assertIn('nli', silicon_evidence['score_breakdown'])
+        self.assertIn('lexical', silicon_evidence['score_breakdown'])
+        self.assertIn('final', silicon_evidence['score_breakdown'])
+        self.assertIn('father_text', silicon_evidence)
+        self.assertIn('source_id', silicon_evidence)
+        self.assertIn('key_evidence', silicon_evidence)
         
-        print("Test Posterior Verification Passed!")
+        print("\nTest Posterior Verification Passed!")
 
 if __name__ == '__main__':
     unittest.main()

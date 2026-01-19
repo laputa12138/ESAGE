@@ -61,16 +61,22 @@ class PosteriorVerifier:
         best_result = {
             "verified": False,
             "score": -1.0,
+            "score_breakdown": {"lexical": 0.0, "nli": 0.0, "final": 0.0, "reason": "No candidate docs"},
             "evidence_ref": None,
-            "reason": "No supporting document found"
+            "reason": "No relevant documents found in candidates."
         }
 
-        target_entity = focus_entity.strip() if focus_entity else ""
+        # Optimization: Pass entities to skip pre-filter logic if exact match exists
+        target_entity = focus_entity
 
+        processed_count = 0
+        
         for doc in candidate_docs:
             doc_text = doc.get("parent_text") or doc.get("document") or ""
             if not doc_text:
                 continue
+            
+            processed_count += 1
                 
             # 2. Quick Pre-filter using Lexical Overlap (Whole Doc)
             doc_lex_score = self._calculate_lexical_overlap(claim_text, doc_text)
@@ -79,9 +85,10 @@ class PosteriorVerifier:
             # --- CRITICAL FIX: Relax Pre-filter ---
             # If target entity is found, SKIP lexical check completely to prevent false negatives.
             # Only apply threshold if entity is NOT found.
-            pre_filter_threshold = 0.05 # Lowered from 0.1
+            pre_filter_threshold = 0.05 
             
             if not has_exact_entity and doc_lex_score < pre_filter_threshold:
+                # Even if skipped, we might want to track it if it's the only doc, but for now just skip
                 logger.debug(f"[Verifier] Skipped doc '{doc.get('source_document_name')}' due to low lexical overlap ({doc_lex_score:.2f})")
                 continue
 
@@ -90,9 +97,6 @@ class PosteriorVerifier:
             nli_score = llm_result["score"]
             extracted_sentence = llm_result["evidence_sentence"]
             
-            if nli_score < 0.1:
-                continue
-
             # Recalculate lexical score on the *extracted sentence* for the final CSS score
             final_lex_score = doc_lex_score
             if extracted_sentence:
@@ -101,33 +105,69 @@ class PosteriorVerifier:
             css_score = self._compute_css_score(final_lex_score, nli_score)
 
             # Apply Exact Match Boosting
+            boosted = False
             if has_exact_entity:
                  css_score = min(css_score + 0.25, 1.0)
+                 boosted = True
+
+            current_breakdown = {
+                "lexical": float(f"{final_lex_score:.2f}"),
+                "nli": float(f"{nli_score:.2f}"),
+                "final": float(f"{css_score:.2f}"),
+                "boosted": boosted
+            }
+
+            # Construct evidence ref (Always construct it so we can return it even if failed)
+            current_evidence_ref = {
+                "source_id": doc.get("source_document_name", "unknown"),
+                "father_chunk_id": doc.get("parent_id", "unknown"),
+                "child_chunk_id": doc.get("id", None),
+                "father_text": doc_text, # Ensure father_text is included
+                "key_evidence": extracted_sentence
+            }
             
+            # Update best valid result or just best result
             if css_score > best_result["score"]:
                 best_result = {
                     "verified": (css_score >= self.threshold),
                     "score": css_score,
+                    "score_breakdown": current_breakdown,
+                    "evidence_ref": current_evidence_ref,
+                    "reason": f"CSS({css_score:.2f}) >= Threshold" if css_score >= self.threshold else f"Best Score {css_score:.2f} < {self.threshold}"
+                }
+                
+                # If we found a verified one, we can stop? Or continue to find BETTER one?
+                # Optimization: stop if score is very high (e.g. > 0.9)
+                if best_result["verified"] and best_result["score"] > 0.95:
+                    break
+
+        # If after checking all top-k docs, we still have -1.0 (all skipped by pre-filter), 
+        # and we processed at least one doc, we should try to verify the best candidate 
+        # (Top-1) without pre-filter to get a reason.
+        if best_result["score"] == -1.0 and candidate_docs:
+             # Force verify first doc to give user some feedback/evidence
+             fallback_doc = candidate_docs[0]
+             fallback_text = fallback_doc.get("parent_text") or fallback_doc.get("document") or ""
+             if fallback_text:
+                llm_res = self._verify_and_extract_evidence_llm(fallback_text, claim_text)
+                
+                # ... same calculation logic simplified ...
+                f_lex = self._calculate_lexical_overlap(claim_text, llm_res["evidence_sentence"] or fallback_text)
+                f_css = self._compute_css_score(f_lex, llm_res["score"])
+                
+                best_result = {
+                    "verified": (f_css >= self.threshold),
+                    "score": f_css,
+                    "score_breakdown": {"lexical": f_lex, "nli": llm_res["score"], "final": f_css, "fallback": True},
                     "evidence_ref": {
-                        "source_id": doc.get("source_document_name", "unknown"),
-                        "father_chunk_id": doc.get("parent_id", "unknown"),
-                        "child_chunk_id": doc.get("id", None),
-                        "father_text": doc_text,
-                        "key_evidence": extracted_sentence
+                        "source_id": fallback_doc.get("source_document_name", "unknown"),
+                        "father_text": fallback_text,
+                        "key_evidence": llm_res["evidence_sentence"]
                     },
-                    "reason": f"CSS({css_score:.2f}) >= Threshold"
+                    "reason": f"Fallback Verify: Score {f_css:.2f}"
                 }
 
-        # Return best result found across top-k documents
-        if best_result["score"] >= self.threshold:
-            return best_result
-        else:
-            return {
-                "verified": False,
-                "score": best_result["score"],
-                "evidence_ref": None,
-                "reason": f"Best Score {best_result['score']:.2f} < {self.threshold}"
-            }
+        return best_result
 
     def _verify_and_extract_evidence_llm(self, document_text: str, claim_text: str) -> Dict[str, Any]:
         """
