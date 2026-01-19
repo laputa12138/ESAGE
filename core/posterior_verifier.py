@@ -158,8 +158,8 @@ class PosteriorVerifier:
 """
         try:
             # Disable thinking for speed, simpler task
-            # Using type=json_object if supported, but relying on robust parsing
-            response = self.llm_service.chat(prompt, max_tokens=200, temperature=0.0, enable_thinking=False, response_format={"type": "json_object"})
+            # response_format param removed as it is not supported by LLMService.chat
+            response = self.llm_service.chat(prompt, max_tokens=200, temperature=0.0, enable_thinking=False)
             
             import json
             from core.json_utils import clean_and_parse_json
