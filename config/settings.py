@@ -91,6 +91,7 @@ DEFAULT_GLOBAL_RETRIEVAL_TOP_N_PER_CHAPTER = int(os.getenv("DEFAULT_GLOBAL_RETRI
 POSTERIOR_VERIFIER_ALPHA = float(os.getenv("POSTERIOR_VERIFIER_ALPHA", "0.6")) # 字面刚性约束权重 (防止实体胡编)
 POSTERIOR_VERIFIER_BETA = float(os.getenv("POSTERIOR_VERIFIER_BETA", "0.4"))   # 语义柔性约束权重 (确保逻辑支撑)
 POSTERIOR_VERIFIER_THRESHOLD = float(os.getenv("POSTERIOR_VERIFIER_THRESHOLD", "0.6")) # 验证通过的最小 CSS 分数阈值
+POSTERIOR_VERIFICATION_TOP_K = int(os.getenv("POSTERIOR_VERIFICATION_TOP_K", "10")) # 后验验证仅使用 Top K 个最相关文档 (性能优化)
 POSTERIOR_VERIFIER_EPSILON = 1e-6 # 防止分母为零的小数
 
 # ==============================================================================

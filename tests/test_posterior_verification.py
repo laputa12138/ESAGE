@@ -56,20 +56,27 @@ class TestPosteriorVerification(unittest.TestCase):
         def llm_side_effect(*args, **kwargs):
             # args[0] or kwargs['query'] is the prompt
             prompt = kwargs.get('query', args[0] if args else "")
-            # print(f"DEBUG: Mock received prompt: {prompt[:50]}...")
             
             # Robust Dispatch using Keywords
-            if "逻辑关系" in prompt or "Premise" in prompt:
-                # NLI Call
+            if "事实核查助手" in prompt or "Premise" in prompt or "待验证陈述" in prompt:
+                # NLI Call - Now expects JSON
                 # Negative cases first!
                 if "Unobtanium" in prompt:
-                    return "0.05"
+                    return json.dumps({"score": 0.05, "evidence_sentence": ""})
                 
                 if "High Purity Silicon" in prompt: 
-                    return "0.9"
+                    # Return JSON with evidence
+                    return json.dumps({
+                        "score": 0.9, 
+                        "evidence_sentence": "The main input element for Solar Panels is High Purity Silicon."
+                    })
                 if "Electricity" in prompt:
-                    return "0.9"
-                return "0.1" # Default low
+                    return json.dumps({
+                        "score": 0.9,
+                        "evidence_sentence": "Solar Panels result in clean energy." # Loose match for test
+                    })
+                
+                return json.dumps({"score": 0.1, "evidence_sentence": ""}) # Default low
             
             # Otherwise assume extraction
             return json.dumps(extraction_json)

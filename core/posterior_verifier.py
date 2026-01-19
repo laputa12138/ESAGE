@@ -36,12 +36,14 @@ class PosteriorVerifier:
     def verify_claim(self, claim_text: str, retrieved_docs: List[Dict[str, Any]], focus_entity: Optional[str] = None) -> Dict[str, Any]:
         """
         验证单个陈述 (claim_text) 是否被 retrieved_docs 中的某篇文档支持。
+        优化逻辑：
+        1. 仅使用 Top-K 文档进行验证。
+        2. 使用 LLM 直接在文档级别进行验证并提取原始证据句，替代之前的逐句匹配。
         
         Args:
             claim_text (str): 待验证的生成内容。
             retrieved_docs (List[Dict]): 检索到的文档列表。
             focus_entity (Optional[str]): 待验证的核心实体词 (如 "石英砂", "比亚迪")。
-                                          如果提供了此词且在文档中精确找到，将给予额外的置信度加成 (Exact Match Boosting)。
 
         Returns:
             Dict: 验证结果对象。
@@ -52,81 +54,127 @@ class PosteriorVerifier:
         if not retrieved_docs:
             return {"verified": False, "score": 0.0, "reason": "No retrieved docs provided"}
 
-        best_score = -1.0
-        best_doc = None
-        best_sentence = None
+        # 1. Limit scope to Top-K docs (Performance Optimization)
+        top_k = getattr(settings, "POSTERIOR_VERIFICATION_TOP_K", 3)
+        candidate_docs = retrieved_docs[:top_k]
         
-        # Clean focus entity
+        best_result = {
+            "verified": False,
+            "score": -1.0,
+            "evidence_ref": None,
+            "reason": "No supporting document found"
+        }
+
         target_entity = focus_entity.strip() if focus_entity else ""
 
-        for doc in retrieved_docs:
+        for doc in candidate_docs:
             doc_text = doc.get("parent_text") or doc.get("document") or ""
             if not doc_text:
                 continue
                 
-            sentences = self._split_sentences(doc_text)
-            best_local_sent = ""
-            best_local_lex_score = -1.0
+            # 2. Quick Pre-filter using Lexical Overlap (Whole Doc) to save LLM tokens
+            # Calculate overlap between claim and the *entire* doc content
+            # If the doc has very little lexical overlap with the claim, it's unlikely to support it.
+            # Special case: If target_entity is present, we always verify (Exact Match Boosting logic preserved).
+            doc_lex_score = self._calculate_lexical_overlap(claim_text, doc_text)
+            has_exact_entity = (target_entity and target_entity in doc_text)
             
-            for sent in sentences:
-                lex_score = self._calculate_lexical_overlap(claim_text, sent)
-                if lex_score > best_local_lex_score:
-                    best_local_lex_score = lex_score
-                    best_local_sent = sent
+            # Threshold: 0.1 for general text, 0.01 if entity matches (very loose)
+            pre_filter_threshold = 0.01 if has_exact_entity else 0.1
             
-            # --- Exact Match Boosting Strategy (Generalized) ---
-            # If the focus entity (e.g. "Quartz Sand", "BYD") appears exactly, we boost confidence.
-            is_exact_match = False
-            if target_entity and len(target_entity) > 1:
-                # Simple check: is the entity in the document text?
-                if target_entity in doc_text:
-                    is_exact_match = True
-                    # Relax pre-filter constraint if we found the exact entity
-                    # (Context might be spread out, so distinct sentence might have low score, but presence is strong signal)
-                    best_local_lex_score = max(best_local_lex_score, 0.25) 
-            
-            # Pre-filtering (Lower threshold if exact match)
-            threshold_pre = 0.05 if is_exact_match else 0.1
-            if best_local_lex_score < threshold_pre:
+            if doc_lex_score < pre_filter_threshold:
+                logger.debug(f"[Verifier] Skipped doc '{doc.get('source_document_name')}' due to low lexical overlap ({doc_lex_score:.2f})")
                 continue
 
-            # NLI Calculation
-            nli_score = self._calculate_nli_score(premise=best_local_sent, hypothesis=claim_text)
+            # 3. LLM verification & Evidence Extraction
+            # This replaces the sentence splitting loop
+            llm_result = self._verify_and_extract_evidence_llm(doc_text, claim_text)
+            nli_score = llm_result["score"]
+            extracted_sentence = llm_result["evidence_sentence"]
             
-            css_score = self._compute_css_score(best_local_lex_score, nli_score)
-            
-            # Apply Boosting
-            if is_exact_match:
-                 # Significant Boost: If the entity exists verbatim, we trust it much more.
-                 # +0.25 bonus, capped at 1.0. 
-                 # This ensures that valid entities mentioned in passing are not filtered.
-                 css_score = min(css_score + 0.25, 1.0)
+            if nli_score < 0.1:
+                continue
 
-            if css_score > best_score:
-                best_score = css_score
-                best_doc = doc
-                best_sentence = best_local_sent
-        
-        if best_score >= self.threshold:
-            return {
-                "verified": True,
-                "score": best_score,
-                "evidence_ref": {
-                    "source_id": best_doc.get("source_document_name", "unknown"),
-                    "father_chunk_id": best_doc.get("parent_id", "unknown"),
-                    "child_chunk_id": best_doc.get("id", None),
-                    "father_text": best_doc.get("parent_text") or best_doc.get("document", ""),
-                    "key_evidence": best_sentence
-                },
-                "reason": f"CSS({best_score:.2f}) >= Threshold"
-            }
+            # Recalculate lexical score on the *extracted sentence* for the final CSS score
+            # If no sentence extracted (but score is high? unlikely), fallback to doc score
+            final_lex_score = doc_lex_score
+            if extracted_sentence:
+                final_lex_score = self._calculate_lexical_overlap(claim_text, extracted_sentence)
+            
+            css_score = self._compute_css_score(final_lex_score, nli_score)
+
+            # Apply Exact Match Boosting
+            if has_exact_entity:
+                 css_score = min(css_score + 0.25, 1.0)
+            
+            if css_score > best_result["score"]:
+                best_result = {
+                    "verified": (css_score >= self.threshold),
+                    "score": css_score,
+                    "evidence_ref": {
+                        "source_id": doc.get("source_document_name", "unknown"),
+                        "father_chunk_id": doc.get("parent_id", "unknown"),
+                        "child_chunk_id": doc.get("id", None),
+                        "father_text": doc_text,
+                        "key_evidence": extracted_sentence # The original sentence extracted by LLM
+                    },
+                    "reason": f"CSS({css_score:.2f}) >= Threshold"
+                }
+
+        # Return best result found across top-k documents
+        if best_result["score"] >= self.threshold:
+            return best_result
         else:
             return {
                 "verified": False,
-                "score": best_score,
+                "score": best_result["score"],
                 "evidence_ref": None,
-                "reason": f"Score {best_score:.2f} < {self.threshold}"
+                "reason": f"Best Score {best_result['score']:.2f} < {self.threshold}"
             }
+
+    def _verify_and_extract_evidence_llm(self, document_text: str, claim_text: str) -> Dict[str, Any]:
+        """
+        使用 LLM 验证 Claim 是否被 Document 支持，并未经修改地提取支撑证据句。
+        """
+        prompt = f"""
+你是一个严格的事实核查助手。你的任务是验证“待验证陈述”是否被“参考文档”所支持。
+
+待验证陈述 (Claim): "{claim_text}"
+
+参考文档 (Document):
+---
+{document_text}
+---
+
+任务要求：
+1. 判断：参考文档是否在语义上支持待验证陈述？
+2. 提取：如果支持，请从参考文档中提取**一句**最能证明该陈述的原始句子。
+   - **必须**直接从文档中复制，**严禁**修改、改写或删减任何字符。
+   - 如果文档中没有明确支持的句子，证据句请留空。
+
+请返回严格的 JSON 格式：
+{{
+  "score": <0.0 到 1.0 之间的置信度分数，1.0表示完全支持>,
+  "evidence_sentence": "<提取的原始证据句，如果不支持则为空字符串>"
+}}
+"""
+        try:
+            # Disable thinking for speed, simpler task
+            response = self.llm_service.chat(prompt, max_tokens=200, temperature=0.0, enable_thinking=False, response_format={"type": "json_object"})
+            
+            import json
+            from core.json_utils import clean_and_parse_json
+            
+            result = clean_and_parse_json(response)
+            
+            score = float(result.get("score", 0.0))
+            evidence = result.get("evidence_sentence", "").strip()
+            
+            return {"score": score, "evidence_sentence": evidence}
+            
+        except Exception as e:
+            logger.error(f"[PosteriorVerifier] LLM verification failed: {e}")
+            return {"score": 0.0, "evidence_sentence": ""}
 
     def _calculate_lexical_overlap(self, str1: str, str2: str) -> float:
         """
@@ -155,79 +203,13 @@ class PosteriorVerifier:
         overlap_score = count_covered / (len(s1) + self.epsilon)
         return min(overlap_score, 1.0) # Cap at 1.0
 
-    def _calculate_nli_score(self, premise: str, hypothesis: str) -> float:
-        """
-        计算语义柔性约束分数 (NLI Probability)。
-        调用 LLM 判断：前提 (Premise) 是否蕴含 (Entails) 假设 (Hypothesis)。
-        """
-        prompt = f"""
-请判断以下两句话的逻辑关系。
-前提 (Premise): "{premise}"
-假设 (Hypothesis): "{hypothesis}"
-
-基于“前提”的内容，“假设”是否被语义支撑或蕴含？
-请只输出一个 0.0 到 1.0 之间的分数值用来表示置信度。
-- 1.0: 完全支持/蕴含。
-- 0.0: 完全无关或矛盾。
-- 0.5: 部分相关或不确定。
-
-请只输出数字，不要输出其他文字。
-"""
-        try:
-            # 使用较快的模型或默认模型
-            # Critical Fix: Thinking models require more tokens to output the reasoning process before the answer.
-            # max_tokens=10 cuts off the thinking block, returning nothing useful.
-            response = self.llm_service.chat(prompt, max_tokens=2048, temperature=0.1) # 低温确保确定性
-            
-            # 提取数字
-            match = re.search(r"(\d+(\.\d+)?)", response)
-            if match:
-                score = float(match.group(1))
-                return min(max(score, 0.0), 1.0) # Clip 0-1
-            else:
-                logger.warning(f"[PosteriorVerifier] NLI response not a number: {response}")
-                return 0.5 # Default fallback
-        except Exception as e:
-            logger.error(f"[PosteriorVerifier] NLI check failed: {e}")
-            return 0.5
-
     def _compute_css_score(self, lexical_score: float, nli_score: float) -> float:
         """
         计算混合分数。
         """
         return (self.alpha * lexical_score) + (self.beta * nli_score)
 
-    def _split_sentences(self, text: str) -> List[str]:
-        """
-        简单的中文分句 (兼容英文句号).
-        保留标点符号。
-        """
-        # regex: split by punctuation, capturing the delimiter
-        # [。！？；!?;] or \.
-        # Note: We need to be careful not to split decimal numbers (e.g. 3.14).
-        # A simple lookbehind (?<!\d)\.(?!\d) is good, or just accept simple splitting for now.
-        # Given this is for text verification, simple splitting is usually fine.
-        
-        sentences = re.split(r'([。！？；!?;]|\.(?=\s|$))', text) 
-        # \.(?=\s|$) means dot followed by space or end of string, avoiding 3.14
-        
-        return self._reconstruct_sentences(sentences)
-
-    def _reconstruct_sentences(self, tokens: List[str]) -> List[str]:
-        result = []
-        current_sent = ""
-        for token in tokens:
-            current_sent += token
-            # If token is a delimiter, flush
-            if re.match(r'^[。！？；!?;.]+$', token.strip()): 
-               result.append(current_sent.strip())
-               current_sent = ""
-        
-        if current_sent.strip():
-            result.append(current_sent.strip())
-            
-        return result
-
     def _clean_text(self, text: str) -> str:
         """移除标点符号和空格"""
         return re.sub(r'[^\w\u4e00-\u9fff]', '', text)
+

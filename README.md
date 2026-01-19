@@ -15,7 +15,9 @@
     * **NodeExtractorAgent (矿工)**: 深度挖掘节点详情与关系。
     * **QueryBuilderAgent (翻译官)**: 生成混合检索查询（Vector + BM25）。
     * **ValidatorAgent (质检员)**: 清洗图谱，合并同义词，剔除噪音。
-* **后验证据验证 (Posterior Evidence Verification)**: 引入 **CSS (Composite Support Score)** 模型，结合**字面刚性约束**（Lexical Overlap）与**语义柔性约束**（NLI Probability），对每一条抽取信息进行“生成-检索-验证”闭环校验，彻底杜绝幻觉。
+* **后验证据验证 (Posterior Evidence Verification)**: 引入 **CSS (Composite Support Score)** 模型。
+    *   **Top-K 聚焦**: 仅使用与生成实体最相关的 Top-K (默认 10) 个检索文档（包括生成依据的源文档）进行验证，大幅提升效率。
+    *   **LLM 证据提取**: 摒弃基于规则的句子匹配，直接让 LLM 从 Top-K 文档中精确提取能够支撑生成的**原始关键句**，确保信息不失真。
 * **Generalized Exact Match Boosting**: 针对实体（公司、技术、原料等）实施精确匹配增强策略，确保关键信息的召回率。
 * **递归式图谱生长 (Recursive Tree-Growing)**: 系统不仅执行静态规划，还能在抽取过程中自动发现新的上游/下游节点，并动态扩展抽取范围，直至达到预设深度。
 * **混合检索架构**: 
@@ -34,7 +36,7 @@
    * `QueryBuilderAgent`: **查询构建者**。为每个节点生成差异化的向量查询和关键词查询，确保检索内容的广度与精度。
    * `NodeExtractorAgent`: **微观探索与验证者**。针对具体节点抽取详细信息，并调用 `PosteriorVerifier` 进行证据注入，同时具备**自我扩展能力**。
    * `ValidatorAgent`: **图谱治理者**。在抽取结束后，对全图进行扫描，合并同义节点（如"光伏玻璃"与"太阳能玻璃"），删除非关联节点。
-4. **PosteriorVerifier (后验验证器)**: 独立的验证模块，计算 CSS 分数，判断 LLM 生成的陈述是否有原文支撑。
+4. **PosteriorVerifier (后验验证器)**: 独立的验证模块，使用 LLM 对 Top-K 文档进行判别和原始证据提取，杜绝幻觉。
 5. **RetrievalService (检索服务)**: 统一封装向量检索（FAISS）和关键词检索（BM25），提供高质量的上下文。
 
 ## 环境安装
@@ -148,7 +150,9 @@ E:\miniconda\envs\ym\python.exe main.py --topic "光伏产业" --max_recursion_d
 2.  **信息抽取**: LLM 从文档中提取结构化信息。
 3.  **后验证据注入 (Posterior Evidence Injection)**:
     *   **PosteriorVerifier** 对提取的每一条信息（Claim）进行验证。
-    *   **CSS 评分**: 计算 Lexical Overlap 和 NLI Probability。如果发现精确实体匹配（Exact Match），给予额外加分。
+    *   **范围锁定**: 仅对 **Top-K** (默认 10) 个最相关文档进行深度检查。
+    *   **原句提取**: 调用 LLM 判断支持性，并**提取原文证据句**（必须与文档完全一致）。
+    *   **CSS 评分**: 结合 NLI 分数和 Lexical 预过滤，精确匹配的实体给予额外加分。
     *   只有 CSS 分数高于阈值的信息才会被保留并注入证据。
 4.  **递归扩展**: 验证通过的新节点（如原材料、产成品）将被加入任务队列，触发下一轮抽取。
 
