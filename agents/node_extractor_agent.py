@@ -5,6 +5,7 @@ from typing import Dict, Optional, List, Any
 
 from agents.base_agent import BaseAgent
 from agents.query_builder_agent import QueryBuilderAgent
+import concurrent.futures
 from core.llm_service import LLMService, LLMServiceError
 from core.retrieval_service import RetrievalService, RetrievalServiceError
 from core.workflow_state import WorkflowState, TASK_TYPE_EXTRACT_NODE
@@ -192,38 +193,66 @@ class NodeExtractorAgent(BaseAgent):
             
             verified_items = []
             filtered_field_items = []
+
+            # Clean items for verification
+            items_cleaned = [item for item in items if isinstance(item, str) and item.strip()]
+            if not items_cleaned:
+                extracted_data[field] = []
+                continue
+
+            # 4.3.2 验证 (Posterior Verification) - Parallelized
+            # Optimization (Phase 5): Use ThreadPoolExecutor for parallel verification
             
-            for item in items:
-                if not isinstance(item, str) or not item.strip():
-                    continue
-                    
-                # claim construction: 简单构造陈述句用于验证
-                # e.g., "光伏玻璃的 input_elements 是 石英砂"
-                claim = f"{node_name}的{field}包含{item}。" 
+            # Define helper function for parallel execution
+            def verify_single_item(item):
                 if field == 'representative_companies':
                     claim = f"{item}是{node_name}环节的代表性企业。"
-                
-                # 4.3.2 验证 (Posterior Verification)
-                # 调用 PosteriorVerifier 计算 CSS 分数 + NLI 验证
-                # Optimization (Phase 3): Pass 'item' as focus_entity for Exact Match Boosting
-                verify_result = self.verifier.verify_claim(claim, retrieved_docs, focus_entity=item)
-                
-                if verify_result['verified']:
-                    verified_items.append(item)
-                    # Store rich evidence
-                    if field not in evidence_details_map:
-                        evidence_details_map[field] = {}
-                    evidence_details_map[field][item] = verify_result['evidence_ref']
-                    
-                    logger.debug(f"[{self.agent_name}] Item verified: '{item}' (Score: {verify_result['score']:.2f})")
                 else:
-                    reason = verify_result.get('reason', 'Unknown reason')
-                    # logger.info(f"[{self.agent_name}] Item REJECTED: '{item}' Reason: {reason}")
-                    filtered_field_items.append({
-                        "value": item,
-                        "reason": reason,
-                        "score": verify_result.get('score', 0.0)
-                    })
+                    claim = f"{node_name}的{field}包括{item}。" # Generic claim
+                
+                # verify_claim Returns {verified, score, evidence_ref, reason}
+                v_res = self.verifier.verify_claim(claim, retrieved_docs, focus_entity=item)
+                return item, v_res
+
+            # Select items to verify
+            items_to_verify = list(items_cleaned)
+            
+            # Execute in parallel
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                # Submit all tasks
+                future_to_item = {executor.submit(verify_single_item, item): item for item in items_to_verify}
+                
+                for future in concurrent.futures.as_completed(future_to_item):
+                    item = future_to_item[future]
+                    try:
+                        _, verify_result = future.result()
+                        
+                        if verify_result['verified']:
+                            verified_items.append(item)
+                            
+                            # Inject Evidence
+                            if verify_result['evidence_ref']:
+                                # Initialize detail map if first time
+                                if field not in evidence_details_map:
+                                    evidence_details_map[field] = {}
+                                
+                                evidence_details_map[field][item] = {
+                                    "source_id": verify_result['evidence_ref']['source_id'],
+                                    "key_evidence": verify_result['evidence_ref']['key_evidence'],
+                                    "score": verify_result['score']
+                                }
+                            logger.debug(f"[{self.agent_name}] Item verified: '{item}' (Score: {verify_result['score']:.2f})")
+                        else:
+                            reason = verify_result.get('reason', 'Unknown reason')
+                            filtered_field_items.append({
+                                "value": item,
+                                "reason": reason,
+                                "score": verify_result.get('score', 0.0)
+                            })
+                            logger.debug(f"[Verifier] Rejected '{item}' (Score: {verify_result['score']:.2f})")
+
+                    except Exception as exc:
+                        logger.error(f"[Verifier] Exception checking item '{item}': {exc}")
             
             # Update the list with only verified items
             extracted_data[field] = verified_items

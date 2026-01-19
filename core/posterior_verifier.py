@@ -72,22 +72,20 @@ class PosteriorVerifier:
             if not doc_text:
                 continue
                 
-            # 2. Quick Pre-filter using Lexical Overlap (Whole Doc) to save LLM tokens
-            # Calculate overlap between claim and the *entire* doc content
-            # If the doc has very little lexical overlap with the claim, it's unlikely to support it.
-            # Special case: If target_entity is present, we always verify (Exact Match Boosting logic preserved).
+            # 2. Quick Pre-filter using Lexical Overlap (Whole Doc)
             doc_lex_score = self._calculate_lexical_overlap(claim_text, doc_text)
             has_exact_entity = (target_entity and target_entity in doc_text)
             
-            # Threshold: 0.1 for general text, 0.01 if entity matches (very loose)
-            pre_filter_threshold = 0.01 if has_exact_entity else 0.1
+            # --- CRITICAL FIX: Relax Pre-filter ---
+            # If target entity is found, SKIP lexical check completely to prevent false negatives.
+            # Only apply threshold if entity is NOT found.
+            pre_filter_threshold = 0.05 # Lowered from 0.1
             
-            if doc_lex_score < pre_filter_threshold:
+            if not has_exact_entity and doc_lex_score < pre_filter_threshold:
                 logger.debug(f"[Verifier] Skipped doc '{doc.get('source_document_name')}' due to low lexical overlap ({doc_lex_score:.2f})")
                 continue
 
             # 3. LLM verification & Evidence Extraction
-            # This replaces the sentence splitting loop
             llm_result = self._verify_and_extract_evidence_llm(doc_text, claim_text)
             nli_score = llm_result["score"]
             extracted_sentence = llm_result["evidence_sentence"]
@@ -96,7 +94,6 @@ class PosteriorVerifier:
                 continue
 
             # Recalculate lexical score on the *extracted sentence* for the final CSS score
-            # If no sentence extracted (but score is high? unlikely), fallback to doc score
             final_lex_score = doc_lex_score
             if extracted_sentence:
                 final_lex_score = self._calculate_lexical_overlap(claim_text, extracted_sentence)
@@ -116,7 +113,7 @@ class PosteriorVerifier:
                         "father_chunk_id": doc.get("parent_id", "unknown"),
                         "child_chunk_id": doc.get("id", None),
                         "father_text": doc_text,
-                        "key_evidence": extracted_sentence # The original sentence extracted by LLM
+                        "key_evidence": extracted_sentence
                     },
                     "reason": f"CSS({css_score:.2f}) >= Threshold"
                 }
@@ -135,6 +132,7 @@ class PosteriorVerifier:
     def _verify_and_extract_evidence_llm(self, document_text: str, claim_text: str) -> Dict[str, Any]:
         """
         使用 LLM 验证 Claim 是否被 Document 支持，并未经修改地提取支撑证据句。
+        增加 Regex Fallback 以增强鲁棒性。
         """
         prompt = f"""
 你是一个严格的事实核查助手。你的任务是验证“待验证陈述”是否被“参考文档”所支持。
@@ -152,7 +150,7 @@ class PosteriorVerifier:
    - **必须**直接从文档中复制，**严禁**修改、改写或删减任何字符。
    - 如果文档中没有明确支持的句子，证据句请留空。
 
-请返回严格的 JSON 格式：
+请返回严格的 JSON 格式（不要使用 Markdown 代码块）：
 {{
   "score": <0.0 到 1.0 之间的置信度分数，1.0表示完全支持>,
   "evidence_sentence": "<提取的原始证据句，如果不支持则为空字符串>"
@@ -160,12 +158,25 @@ class PosteriorVerifier:
 """
         try:
             # Disable thinking for speed, simpler task
+            # Using type=json_object if supported, but relying on robust parsing
             response = self.llm_service.chat(prompt, max_tokens=200, temperature=0.0, enable_thinking=False, response_format={"type": "json_object"})
             
             import json
             from core.json_utils import clean_and_parse_json
             
-            result = clean_and_parse_json(response)
+            try:
+                result = clean_and_parse_json(response)
+                if not isinstance(result, dict):
+                    raise ValueError("Parsed result is not a dictionary")
+            except Exception:
+                # --- Regex Fallback ---
+                logger.warning(f"[PosteriorVerifier] JSON parse failed, trying Regex. Response: {response[:100]}...")
+                score_match = re.search(r'"score":\s*([\d\.]+)', response)
+                evi_match = re.search(r'"evidence_sentence":\s*"(.*?)"', response)
+                
+                score = float(score_match.group(1)) if score_match else 0.0
+                evidence = evi_match.group(1) if evi_match else ""
+                result = {"score": score, "evidence_sentence": evidence}
             
             score = float(result.get("score", 0.0))
             evidence = result.get("evidence_sentence", "").strip()
