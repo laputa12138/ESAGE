@@ -196,11 +196,9 @@ class WorkflowState:
                 nodes_to_remove.append(node_name)
                 continue
 
-            # Check for "Not Found" patterns
-            evidence = details.get('evidence_snippet', '') or ''
-            desc = details.get('description', '') or ''
-            
-            # Pattern check: "未找到" in evidence or description AND empty component lists
+            # Pattern check: Empty component lists
+            # Modified: Strict check. If all structural components are empty, remove the node.
+            # Even if it has a description, it's considered a "zombie node" without value for the graph structure.
             is_empty_components = (
                 not details.get('input_elements') and 
                 not details.get('output_products') and 
@@ -208,9 +206,8 @@ class WorkflowState:
                 not details.get('representative_companies')
             )
             
-            has_negative_evidence = "未找到" in str(evidence) or "No specific documents" in str(evidence) or "not found" in str(evidence).lower()
-            
-            if is_empty_components and has_negative_evidence:
+            # Removed dependence on "negative evidence" strings.
+            if is_empty_components:
                  nodes_to_remove.append(node_name)
         
         # Remove from structure and details

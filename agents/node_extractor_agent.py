@@ -240,6 +240,8 @@ class NodeExtractorAgent(BaseAgent):
                                     "source_id": verify_result['evidence_ref']['source_id'],
                                     "key_evidence": verify_result['evidence_ref']['key_evidence'],
                                     "score": verify_result['score'],
+                                    "entity_match_score": verify_result.get('score_breakdown', {}).get('lexical', 0.0), # Added breakdown
+                                    "nli_score": verify_result.get('score_breakdown', {}).get('nli', 0.0),             # Added breakdown
                                     "father_text": verify_result['evidence_ref'].get('father_text', ""), # Add father_text
                                     "score_breakdown": verify_result.get('score_breakdown', {}) # Add score breakdown
                                 }
@@ -258,6 +260,8 @@ class NodeExtractorAgent(BaseAgent):
                                  filtered_entry["evidence_detail"] = {
                                     "source_id": verify_result['evidence_ref']['source_id'],
                                     "key_evidence": verify_result['evidence_ref']['key_evidence'],
+                                    "entity_match_score": verify_result.get('score_breakdown', {}).get('lexical', 0.0), # Added breakdown
+                                    "nli_score": verify_result.get('score_breakdown', {}).get('nli', 0.0),             # Added breakdown
                                     "father_text": verify_result['evidence_ref'].get('father_text', "")
                                  }
                             
