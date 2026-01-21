@@ -17,6 +17,8 @@ from core.orchestrator import Orchestrator
 from agents.structure_planner_agent import StructurePlannerAgent
 from agents.node_extractor_agent import NodeExtractorAgent
 from agents.validator_agent import ValidatorAgent
+from core.global_context_builder import GlobalContextBuilder
+from core.graph_refiner import GraphRefiner
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +39,13 @@ class ReportGenerationPipeline:
                  index_name: Optional[str] = None,
                  force_reindex: bool = False,
                  max_workflow_iterations: int = 100,
-                 # Indexing parameters
+                 # 索引参数
                  cli_overridden_parent_chunk_size: int = settings.DEFAULT_PARENT_CHUNK_SIZE,
                  cli_overridden_parent_chunk_overlap: int = settings.DEFAULT_PARENT_CHUNK_OVERLAP,
                  cli_overridden_child_chunk_size: int = settings.DEFAULT_CHILD_CHUNK_SIZE,
                  cli_overridden_child_chunk_overlap: int = settings.DEFAULT_CHILD_CHUNK_OVERLAP,
                  cli_overridden_vector_top_k: int = settings.DEFAULT_VECTOR_STORE_TOP_K,
-                 # Ignored params kept for signature compatibility if needed, or remove if main.py adapted
+                 # 忽略的参数保持签名兼容性，如果 main.py 适配了可以移除
                  **kwargs
                 ):
 
@@ -81,6 +83,10 @@ class ReportGenerationPipeline:
         self.node_extractor: Optional[NodeExtractorAgent] = None
         self.validator_agent: Optional[ValidatorAgent] = None
 
+        # New Components
+        self.global_context_builder: Optional[GlobalContextBuilder] = None
+        self.graph_refiner: Optional[GraphRefiner] = None
+
         logger.info("IndustryExtractionPipeline (named ReportGenerationPipeline) initialized.")
 
     def _initialize_components(self):
@@ -110,8 +116,19 @@ class ReportGenerationPipeline:
                 retrieval_service=self.retrieval_service
             )
             
-        if not self.validator_agent:
             self.validator_agent = ValidatorAgent(
+                llm_service=self.llm_service
+            )
+
+        # Initialize New Components
+        if not self.global_context_builder:
+            self.global_context_builder = GlobalContextBuilder(
+                llm_service=self.llm_service,
+                retrieval_service=self.retrieval_service
+            )
+        
+        if not self.graph_refiner:
+            self.graph_refiner = GraphRefiner(
                 llm_service=self.llm_service
             )
 
@@ -127,10 +144,10 @@ class ReportGenerationPipeline:
             self.workflow_state.log_event("Orchestrator initialized.")
 
     def _process_and_load_data(self, data_path: str):
-        # Reuse existing logic for indexing (simplified logic here for brevity but assuming same as before)
-        # For refactoring speed, I'll copy the core logic but trim logging a bit.
+        # 复用现有的索引逻辑（为简洁起见，此处逻辑假设与之前相同）
+        # 为了重构速度，我将复制核心逻辑但稍微精简日志。
         
-        logger.info(f"Processing data from {data_path}")
+        logger.info(f"正在处理数据: {data_path}")
         self.workflow_state.log_event(f"Processing data from: {data_path}")
         
         effective_index_name = self.index_name or (os.path.basename(os.path.normpath(data_path)) if data_path else "default_idx")
@@ -179,26 +196,37 @@ class ReportGenerationPipeline:
 
     def run(self, user_topic: str, data_path: str, report_title: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
-        Runs the extraction pipeline. Returns the industry graph JSON dict.
+        运行抽取流水线。返回产业链图谱的 JSON 字典。
         """
         self.workflow_state = WorkflowState(user_topic, report_title)
-        self.workflow_state.log_event("Pipeline run initiated (Extraction Mode).")
+        self.workflow_state.log_event("流水线启动 (抽取模式)。")
 
         try:
             self._process_and_load_data(data_path)
             self._initialize_components()
 
-            # Add initial task
+            # 添加初始任务
             initial_payload = {'user_topic': user_topic}
-            initial_payload.update(kwargs) # Pass through CLI args like max_recursion_depth
+            initial_payload.update(kwargs) # 传递 CLI 参数，如 max_recursion_depth
+            
+            # --- 1. 全局上下文构建 ---
+            if self.global_context_builder:
+                global_context = self.global_context_builder.build_context(user_topic)
+                self.workflow_state.set_global_context(global_context)
+
             self.workflow_state.add_task(TASK_TYPE_PLAN_STRUCTURE, payload=initial_payload)
             
-            # Run Orchestrator
+            # --- 2. 运行编排器 ---
             self.orchestrator.coordinate_workflow()
             
-            # Prune empty/evidenceless nodes
+            # 剪枝：移除空节点或无证据的节点
             self.workflow_state.prune_industry_graph()
             
+            # --- 3. 图谱优化 (中央控制) ---
+            if self.graph_refiner:
+                 self.workflow_state.industry_graph = self.graph_refiner.refine_graph(self.workflow_state.industry_graph)
+                 self.workflow_state.log_event("图谱优化完成。")
+
             return self.workflow_state.industry_graph
 
         except Exception as e:

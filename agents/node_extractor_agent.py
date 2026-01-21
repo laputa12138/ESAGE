@@ -33,8 +33,8 @@ class NodeExtractorAgent(BaseAgent):
         super().__init__(agent_name="NodeExtractorAgent", llm_service=llm_service)
         self.retrieval_service = retrieval_service
         
-        # Initialize PosteriorVerifier if reranker is available
-        # This part is now handled by the new self.verifier, but keeping for potential future use or if reranker is used elsewhere.
+        # 初始化 PosteriorVerifier 如果 reranker 可用
+        # 这部分现在由新的 self.verifier 处理，但保留以备将来使用或如果 reranker 在其他地方使用。
         self.posterior_verifier = None
         if hasattr(self.retrieval_service, 'reranker_service') and self.retrieval_service.reranker_service:
             self.posterior_verifier = PosteriorVerifier(self.retrieval_service.reranker_service)
@@ -42,9 +42,9 @@ class NodeExtractorAgent(BaseAgent):
             logger.warning(f"[{self.agent_name}] RerankerService missing, PosteriorVerifier disabled.")
         self.prompt_template = prompt_template or settings.NODE_EXTRACTOR_PROMPT
         
-        # Phase 2 Components
+        # Phase 2 组件
         self.query_builder = QueryBuilderAgent(llm_service)
-        self.verifier = PosteriorVerifier(llm_service) # Logic now in verifier
+        self.verifier = PosteriorVerifier(llm_service) # 逻辑现在在 verifier 中
         
         if not self.llm_service:
             raise NodeExtractorAgentError("需要 LLMService。")
@@ -59,7 +59,7 @@ class NodeExtractorAgent(BaseAgent):
         node_name = payload.get('node_name')
         category = payload.get('category', 'unknown')
         current_depth = payload.get('depth', 0)
-        max_depth = payload.get('max_depth', 2) # Default limit to prevent infinite loops
+        max_depth = payload.get('max_depth', 2) # 默认限制以防止无限循环
         
         logger.info(f"[{self.agent_name}] 开始抽取节点信息: {node_name} (分类: {category})")
         
@@ -86,7 +86,7 @@ class NodeExtractorAgent(BaseAgent):
                 final_top_n=settings.DEFAULT_RETRIEVAL_FINAL_TOP_N
             )
             
-            # Format context for LLM extraction
+            # 格式化上下文以供 LLM 抽取
             context_text = ""
             for i, doc in enumerate(retrieved_docs):
                 # doc包含 'parent_text' (上下文) 和 'child_text_preview'
@@ -97,14 +97,17 @@ class NodeExtractorAgent(BaseAgent):
             logger.info(f"[{self.agent_name}] Retrieved {len(retrieved_docs)} docs for extraction.")
 
             # --- Step 3: Candidate Extraction (LLM) ---
+            global_context = getattr(workflow_state, 'global_context', "暂无全局背景") or "暂无全局背景"
+            
             prompt = self.prompt_template.format(
                 node_name=node_name,
+                global_context=global_context, # Inject Global Context
                 retrieved_content=context_text
             )
 
-            # 调用 LLM (Log simplified)
+            # 调用 LLM (日志简化)
             logger.info(f"[{self.agent_name}] 正在调用 LLM 进行信息抽取 (Docs: {len(retrieved_docs)})...")
-            logger.debug(f"Extraction Prompt for {node_name}: {prompt[:200]}...") # Log full prompt only in DEBUG
+            logger.debug(f"Extraction Prompt for {node_name}: {prompt[:200]}...") # 仅在 DEBUG 模式下记录完整 prompt
 
             raw_response = self.llm_service.chat(
                 query=prompt,
@@ -114,32 +117,32 @@ class NodeExtractorAgent(BaseAgent):
             # 解析 JSON
             extracted_data = clean_and_parse_json(raw_response, context=f"extraction_{node_name}")
             
-            # Handling edge case where LLM returns a list
+            # 处理 LLM 返回列表的边界情况
             if isinstance(extracted_data, list):
                 if extracted_data and isinstance(extracted_data[0], dict):
                     extracted_data = extracted_data[0]
                 else:
                     extracted_data = None
 
-            # JSON Parsing Failure Handling
+            # JSON 解析失败处理
             if not extracted_data or not isinstance(extracted_data, dict):
                 logger.error(f"[{self.agent_name}] 无法为 {node_name} 解析 JSON。保存原始输出以供调试。")
                 extracted_data = {
                     "entity_name": node_name,
                     "description": "JSON 解析失败",
-                    "_raw_llm_output": raw_response, # User requirement: Keep raw output
+                    "_raw_llm_output": raw_response, # 用户要求：保留原始输出
                     "error": "JSON parse error"
                 }
             else:
-                # 4.1 Check for Empty Node (All fields empty)
-                # If only entity_name is present, treat as empty
+                # 4.1 检查空节点 (所有字段为空)
+                # 如果只有 entity_name 存在，视为为空
                 meaningful_keys = ['input_elements', 'output_products', 'key_technologies', 'representative_companies', 'description']
                 has_content = any(extracted_data.get(k) and str(extracted_data.get(k)).strip() for k in meaningful_keys)
                 
                 if not has_content:
                     logger.warning(f"[{self.agent_name}] 节点 '{node_name}' 抽取结果为空 (无实质信息)。跳过保存。")
                     if task_id: workflow_state.complete_task(task_id, f"节点 '{node_name}' 无有效信息，已忽略。", status='success')
-                    return # Skip saving and recursion
+                    return # 跳过保存和递归
 
                 # 4.2 溯源匹配 (Source Tracing & Evidence Matching)
                 try:
@@ -150,7 +153,7 @@ class NodeExtractorAgent(BaseAgent):
                     extracted_data['source_tracing_error'] = str(e)
 
 
-            # 5. Expand Graph (Recursive Extraction)
+            # 5. 扩展图谱 (递归抽取)
             if current_depth < max_depth:
                 self._expand_nodes(extracted_data, workflow_state, current_depth, max_depth)
 

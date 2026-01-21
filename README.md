@@ -15,6 +15,8 @@
   * **NodeExtractorAgent (节点抽取Agent)**: 负责微观层面的节点信息深度挖掘与关系抽取。
   * **QueryBuilderAgent (语义查询构建Agent)**: 负责生成基于向量 (Vector) 和关键词 (BM25) 的混合检索查询。
   * **ValidatorAgent (一致性验证Agent)**: 负责图谱的清洗、实体对齐及噪音剔除。
+* **全局知识索引 (Global Knowledge Indexing)**: 在抽取前构建 "全局上下文"，使 Agent 预先理解数据库的宏观结构与粒度，提升抽取的准确性。
+* **后验图谱优化 (Graph Refinement)**: 引入 "中央控制" 机制，自动识别并合并同义实体，优化节点层级与命名规范。
 * **后验证据验证 (Posterior Evidence Verification)**: 引入 **CSS (Composite Support Score)** 模型。
   * **Top-K 聚焦**: 仅使用与生成实体最相关的 Top-K (默认 10) 个检索文档进行验证。
   * **LLM 证据提取**: 利用大语言模型从文档中精确提取支持性原文证据，确保可追溯性。
@@ -28,13 +30,15 @@
 
 1. **WorkflowState (工作流状态)**: 维护任务队列、动态图谱结构（Graph）和全局上下文信息。
 2. **Orchestrator (系统编排器)**: 负责任务调度与资源分配，根据当前状态动态激活相应的 Agent。
-3. **关键 Agents**:
+3. **GlobalContextBuilder (全局上下文构建器)**: 在任务初期由于检索宽泛信息，为全流程提供先验知识引导。
+4. **关键 Agents**:
    * `StructurePlannerAgent`: **结构化规划Agent**。分析行业主题，定义初始的产业链上、中、下游层级结构。
    * `QueryBuilderAgent`: **语义查询构建Agent**。为特定节点生成高精度的多样化查询请求。
-   * `NodeExtractorAgent`: **节点抽取Agent**。执行具体的信息抽取任务，并调用验证模块进行证据注入与自我扩展。
+   * `NodeExtractorAgent`: **节点抽取Agent**。结合全局上下文执行微观信息抽取与递归扩展。
    * `ValidatorAgent`: **一致性验证Agent**。执行图谱治理，合并同义实体，确保知识库的整洁与一致性。
-4. **PosteriorVerifier (后验验证模块)**: 独立的验证组件，基于 CSS 模型对提取信息进行真值判别与证据关联。
-5. **RetrievalService (混合检索模块)**: 封装向量检索与关键词检索，提供统一的高质量上下文召回服务。
+5. **GraphRefiner (图谱优化器)**: 位于流程末端的中央控制逻辑，负责最终的图谱清洗与实体对齐。
+6. **PosteriorVerifier (后验验证模块)**: 独立的验证组件，基于 CSS 模型对提取信息进行真值判别与证据关联。
+7. **RetrievalService (混合检索模块)**: 封装向量检索与关键词检索，提供统一的高质量上下文召回服务。
 
 ## 可视化 (Visualization)
 
@@ -128,12 +132,14 @@ npm run dev
 
 | 路径                  | 文件名                         | 作用与职责                                                      |
 | :-------------------- | :----------------------------- | :-------------------------------------------------------------- |
-| **`core/`**   | `workflow_state.py`          | **系统状态管理**。维护图谱数据结构与任务流状态。          |
-|                       | `orchestrator.py`            | **系统编排器**。系统的核心调度引擎。                      |
-|                       | `posterior_verifier.py`      | **后验验证模块**。基于 Lexical + NLI 的证据验证核心逻辑。 |
-|                       | `retrieval_service.py`       | **混合检索模块**。集成向量与关键词检索的统一服务层。      |
-| **`agents/`** | `structure_planner_agent.py` | **结构化规划Agent**。生成宏观产业架构。                   |
-|                       | `query_builder_agent.py`     | **语义查询构建Agent**。生成高召回率的检索查询。           |
-|                       | `node_extractor_agent.py`    | **节点抽取Agent**。执行微观信息抽取与递归扩展。           |
-|                       | `validator_agent.py`         | **一致性验证Agent**。执行图谱的合并与清洗。               |
-| **根目录**      | `main.py`                    | **程序入口**。参数解析与系统启动脚本。                    |
+| **`core/`**           | `workflow_state.py`            | **系统状态管理**。维护图谱数据结构与任务流状态。          |
+|                       | `orchestrator.py`              | **系统编排器**。系统的核心调度引擎。                      |
+|                       | `global_context_builder.py`    | **全局上下文构建器**。生成行业先验知识背景。              |
+|                       | `graph_refiner.py`             | **图谱优化器**。后处理合并同义节点与优化结构。            |
+|                       | `posterior_verifier.py`        | **后验验证模块**。基于 Lexical + NLI 的证据验证核心逻辑。 |
+|                       | `retrieval_service.py`         | **混合检索模块**。集成向量与关键词检索的统一服务层。      |
+| **`agents/`**         | `structure_planner_agent.py`   | **结构化规划Agent**。生成宏观产业架构。                   |
+|                       | `query_builder_agent.py`       | **语义查询构建Agent**。生成高召回率的检索查询。           |
+|                       | `node_extractor_agent.py`      | **节点抽取Agent**。执行微观信息抽取与递归扩展。           |
+|                       | `validator_agent.py`           | **一致性验证Agent**。执行图谱的合并与清洗。               |
+| **根目录**            | `main.py`                      | **程序入口**。参数解析与系统启动脚本。                    |
