@@ -2,6 +2,7 @@ import logging
 import json
 from typing import Dict, Any, Optional
 
+from config import settings
 from core.workflow_state import WorkflowState, TASK_TYPE_PLAN_STRUCTURE, TASK_TYPE_EXTRACT_NODE, TASK_TYPE_VALIDATE_GRAPH
 from agents.structure_planner_agent import StructurePlannerAgent
 from agents.node_extractor_agent import NodeExtractorAgent
@@ -23,7 +24,7 @@ class Orchestrator:
                  structure_planner: StructurePlannerAgent,
                  node_extractor: NodeExtractorAgent,
                  validator_agent: Optional[ValidatorAgent] = None,
-                 max_workflow_iterations: int = 100,
+                 max_workflow_iterations: int = settings.DEFAULT_MAX_WORKFLOW_ITERATIONS,
                 ):
         self.workflow_state = workflow_state
         self.agents = {
@@ -67,7 +68,8 @@ class Orchestrator:
         self.workflow_state.log_event("编排器开始协调工作流。")
         iteration_count = 0
         stall_patience_counter = 0
-        STALL_PATIENCE_THRESHOLD = 5
+        # 使用配置参数
+        stall_patience_threshold = settings.DEFAULT_STALL_PATIENCE_THRESHOLD
 
         while not self.workflow_state.get_flag('extraction_complete', False):
             if iteration_count >= self.max_workflow_iterations:
@@ -92,7 +94,7 @@ class Orchestrator:
                     self.workflow_state.log_event("所有节点抽取完成且已验证。工作流结束。")
                     break
                 
-                if stall_patience_counter >= STALL_PATIENCE_THRESHOLD:
+                if stall_patience_counter >= stall_patience_threshold:
                     logger.warning("编排器: 检测到停滞（任务队列长期为空）。停止执行。")
                     self.workflow_state.log_event("检测到停滞：任务队列为空且未完成所有节点抽取。")
                     break

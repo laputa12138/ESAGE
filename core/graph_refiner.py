@@ -33,14 +33,17 @@ class GraphRefiner:
         
         all_nodes = set()
         
+        # 获取结构数据 (修复：正确的路径是 structure 子字典)
+        structure = industry_graph.get('structure', {})
+        
         # Collect from structure lists
         for category in ['upstream', 'midstream', 'downstream']:
-            nodes = industry_graph.get(category, [])
+            nodes = structure.get(category, [])
             if isinstance(nodes, list):
                 all_nodes.update([n for n in nodes if isinstance(n, str)])
         
-        # Collect from details keys
-        details = industry_graph.get('details', {})
+        # Collect from details keys (修复：键名是 node_details，不是 details)
+        details = industry_graph.get('node_details', {})
         all_nodes.update(details.keys())
         
         nodes_list = sorted(list(all_nodes))
@@ -89,8 +92,10 @@ class GraphRefiner:
         """
         logger.info(f"[GraphRefiner] 正在应用 {len(suggestions)} 条合并建议...")
         
-        details = graph.get('details', {})
-        structure_updates = {k: list(graph.get(k, [])) for k in ['upstream', 'midstream', 'downstream']}
+        # 修复：正确的键名是 node_details，且 structure 是嵌套的
+        details = graph.get('node_details', {})
+        structure = graph.get('structure', {})
+        structure_updates = {k: list(structure.get(k, [])) for k in ['upstream', 'midstream', 'downstream']}
         
         for suggestion in suggestions:
             target = suggestion.get('target_node')
@@ -149,9 +154,9 @@ class GraphRefiner:
                 # Update list, removing duplicates just in case
                 structure_updates[category] = sorted(list(set(new_list)))
 
-        # Apply updates
-        graph['details'] = details
-        graph.update(structure_updates)
+        # Apply updates (修复：正确更新嵌套的 structure)
+        graph['node_details'] = details
+        graph['structure'].update(structure_updates)
         
         return graph
 

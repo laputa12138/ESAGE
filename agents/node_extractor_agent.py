@@ -13,6 +13,7 @@ from config import settings
 from core.json_utils import clean_and_parse_json
 
 from core.posterior_verifier import PosteriorVerifier
+from core.workflow_logger import get_workflow_logger
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,14 @@ class NodeExtractorAgent(BaseAgent):
         
         logger.info(f"[{self.agent_name}] 开始抽取节点信息: {node_name} (分类: {category})")
         
+        # 初始化工作流日志器
+        wf_logger = get_workflow_logger()
+        wf_logger.log_agent_start(
+            agent_name=self.agent_name,
+            task_description=f'抽取节点 "{node_name}"',
+            inputs={"节点名称": node_name, "分类": category, "递归深度": f"{current_depth}/{max_depth}"}
+        )
+        
         if not node_name:
             err_msg = "任务载荷中未找到节点名称 (node_name)。"
             logger.error(err_msg)
@@ -78,12 +87,24 @@ class NodeExtractorAgent(BaseAgent):
             vector_queries = queries.get('vector_queries', [])
             bm25_queries = queries.get('bm25_queries', [])
 
+            # 记录生成的 Query
+            wf_logger.log_query_generation(vector_queries, bm25_queries)
+
             # --- Step 2: Hybrid Retrieval (Retrieval Service) ---
             # 使用分离的查询列表进行检索
             retrieved_docs = self.retrieval_service.retrieve(
                 query_texts=vector_queries,
                 bm25_query_texts=bm25_queries,
                 final_top_n=settings.DEFAULT_RETRIEVAL_FINAL_TOP_N
+            )
+            
+            # 记录检索结果
+            reranker_scores = [doc.get('reranker_score', 0) for doc in retrieved_docs if 'reranker_score' in doc]
+            top_sources = list(set([doc.get('source_document_name', '') for doc in retrieved_docs[:5]]))
+            wf_logger.log_retrieval_results(
+                doc_count=len(retrieved_docs),
+                reranker_scores=reranker_scores[:10] if reranker_scores else None,
+                top_sources=top_sources
             )
             
             # 格式化上下文以供 LLM 抽取
@@ -160,13 +181,22 @@ class NodeExtractorAgent(BaseAgent):
             # 6. 更新工作流状态
             workflow_state.update_node_details(node_name, extracted_data)
 
+            # 记录抽取结果统计
+            fields_to_log = ['input_elements', 'output_products', 'key_technologies', 'representative_companies']
+            extracted_counts = {f: len(extracted_data.get(f, [])) for f in fields_to_log}
+            evidence_details = extracted_data.get('evidence_details', {})
+            verified_counts = {f: len(evidence_details.get(f, {})) for f in fields_to_log}
+            wf_logger.log_extraction_results(node_name, extracted_counts, verified_counts)
+
             success_msg = f"节点 '{node_name}' 数据抽取完成。"
             logger.info(f"[{self.agent_name}] {success_msg}")
+            wf_logger.log_agent_end(self.agent_name, success=True, summary=f"验证通过 {sum(verified_counts.values())} 项")
             if task_id: workflow_state.complete_task(task_id, success_msg, status='success')
 
         except Exception as e:
             err_msg = f"节点 '{node_name}' 抽取失败: {e}"
             logger.error(err_msg, exc_info=True)
+            wf_logger.log_agent_end(self.agent_name, success=False, summary=str(e))
             if task_id: workflow_state.complete_task(task_id, err_msg, status='failed')
             raise NodeExtractorAgentError(err_msg) from e
 

@@ -109,6 +109,18 @@ class PosteriorVerifier:
             if has_exact_entity:
                  css_score = min(css_score + 0.25, 1.0)
                  boosted = True
+            
+            # Apply Entity Frequency Boosting (新增：实体频率增强)
+            # 综合考虑实体在 evidence 和 father_text 中的出现频率
+            if focus_entity:
+                freq_boost = self._compute_entity_frequency_boost(
+                    entity=focus_entity,
+                    evidence_text=extracted_sentence,
+                    father_text=doc_text
+                )
+                if freq_boost > 0:
+                    css_score = min(css_score + freq_boost, 1.0)
+                    boosted = True
 
             current_breakdown = {
                 "lexical": float(f"{final_lex_score:.2f}"),
@@ -264,3 +276,75 @@ class PosteriorVerifier:
         """移除标点符号和空格"""
         return re.sub(r'[^\w\u4e00-\u9fff]', '', text)
 
+    def _compute_entity_frequency_boost(self, 
+                                         entity: str, 
+                                         evidence_text: str, 
+                                         father_text: str) -> float:
+        """
+        计算实体频率增强分数。
+        
+        综合考虑：
+        1. 实体在 evidence_text (key_evidence) 中的出现次数
+        2. 实体在 father_text (完整父文档) 中的出现次数
+        3. 实体在 father_text 中的位置 (开头出现加分)
+        4. 证据长度归一化 (过长的证据适当惩罚)
+        
+        Args:
+            entity: 待验证的实体词
+            evidence_text: 提取的关键证据句
+            father_text: 完整的父文档文本
+        
+        Returns:
+            float: 频率增强分数 [0, 0.3]，可叠加到最终分数
+        """
+        if not entity or not father_text:
+            return 0.0
+        
+        entity_lower = entity.lower()
+        evidence_lower = evidence_text.lower() if evidence_text else ""
+        father_lower = father_text.lower()
+        
+        # 1. 实体在 evidence_text 中的出现次数 (权重较高)
+        evidence_count = evidence_lower.count(entity_lower)
+        
+        # 2. 实体在 father_text 中的出现次数
+        father_count = father_lower.count(entity_lower)
+        
+        # 3. 频率得分 (上限为 1.0)
+        # 公式: evidence_count * 2 + father_count，除以 5 作为归一化
+        frequency_score = min(1.0, (evidence_count * 2 + father_count) / 5.0)
+        
+        # 4. 位置加分 (如果实体出现在 father_text 开头 20% 位置)
+        position_bonus = 0.0
+        first_pos = father_lower.find(entity_lower)
+        if first_pos != -1:
+            # 开头 20% 位置出现，给予 0.1 加分
+            if first_pos < len(father_text) * 0.2:
+                position_bonus = 0.1
+            # 开头 10% 位置出现，给予额外加分
+            elif first_pos < len(father_text) * 0.1:
+                position_bonus = 0.15
+        
+        # 5. 证据长度归一化 (理想长度 50-200 字符)
+        # 过短的证据可能不够充分，过长的证据可能稀释匹配度
+        ideal_min, ideal_max = 50, 200
+        evidence_len = len(evidence_text) if evidence_text else 0
+        
+        if evidence_len == 0:
+            length_factor = 0.5  # 无证据句，惩罚
+        elif evidence_len < ideal_min:
+            length_factor = 0.8  # 证据过短，轻微惩罚
+        elif evidence_len > ideal_max * 2:
+            length_factor = 0.7  # 证据过长，适当惩罚
+        else:
+            length_factor = 1.0  # 理想长度，无惩罚
+        
+        # 6. 计算最终增强分数 (上限 0.3)
+        boost = (frequency_score + position_bonus) * length_factor * 0.3
+        
+        logger.debug(f"[EntityFreqBoost] Entity='{entity}' | EvCount={evidence_count} | "
+                    f"FatherCount={father_count} | FreqScore={frequency_score:.2f} | "
+                    f"PosBonus={position_bonus:.2f} | LenFactor={length_factor:.2f} | "
+                    f"FinalBoost={boost:.3f}")
+        
+        return min(boost, 0.3)

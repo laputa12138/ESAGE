@@ -141,6 +141,13 @@ CHAPTER_RETRIEVAL_QUERIES_PER_ITERATION = int(os.getenv("CHAPTER_RETRIEVAL_QUERI
 
 
 # ==============================================================================
+# 工作流配置 (Workflow Configuration)
+# ==============================================================================
+DEFAULT_MAX_WORKFLOW_ITERATIONS = int(os.getenv("DEFAULT_MAX_WORKFLOW_ITERATIONS", "1000"))  # 工作流最大迭代次数
+DEFAULT_MAX_RECURSION_DEPTH = int(os.getenv("DEFAULT_MAX_RECURSION_DEPTH", "2"))           # 图谱递归扩展最大深度
+DEFAULT_STALL_PATIENCE_THRESHOLD = int(os.getenv("DEFAULT_STALL_PATIENCE_THRESHOLD", "5")) # 停滞检测阈值
+
+# ==============================================================================
 # 日志配置 (Logging Configuration)
 # ==============================================================================
 LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG").upper() # 日志级别 (DEBUG, INFO, WARNING, ERROR, CRITICAL)

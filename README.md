@@ -20,8 +20,10 @@
 * **后验证据验证 (Posterior Evidence Verification)**: 引入 **CSS (Composite Support Score)** 模型。
   * **Top-K 聚焦**: 仅使用与生成实体最相关的 Top-K (默认 10) 个检索文档进行验证。
   * **LLM 证据提取**: 利用大语言模型从文档中精确提取支持性原文证据，确保可追溯性。
+  * **实体频率增强**: 综合考虑实体在证据和原文中的出现频率、位置信息和证据长度，优化验证分数。
 * **混合检索架构**: 结合语义检索 (捕捉隐含关系) 与精确匹配检索 (捕捉专有名词)。
 * **递归式图谱生长 (Recursive Tree-Growing)**: 支持从初始骨架出发，动态发现并扩展新的上下游节点。
+* **工作流日志系统 (Workflow Logger)**: 专用的结构化日志输出，清晰展示 Agent 执行过程、Query 生成、检索结果和实体验证详情。
 * **可视化交互**: 基于 React + Cytoscape.js 的交互式前端，支持图谱的动态展示与细节查看。
 
 ## 系统架构
@@ -38,7 +40,8 @@
    * `ValidatorAgent`: **一致性验证Agent**。执行图谱治理，合并同义实体，确保知识库的整洁与一致性。
 5. **GraphRefiner (图谱优化器)**: 位于流程末端的中央控制逻辑，负责最终的图谱清洗与实体对齐。
 6. **PosteriorVerifier (后验验证模块)**: 独立的验证组件，基于 CSS 模型对提取信息进行真值判别与证据关联。
-7. **RetrievalService (混合检索模块)**: 封装向量检索与关键词检索，提供统一的高质量上下文召回服务。
+7. **WorkflowLogger (工作流日志器)**: 专用日志模块，提供清晰的 Agent 执行追踪和结构化输出。
+8. **RetrievalService (混合检索模块)**: 封装向量检索与关键词检索，提供统一的高质量上下文召回服务。
 
 ## 可视化 (Visualization)
 
@@ -114,6 +117,19 @@ E:\miniconda\envs\ym\python.exe main.py --topic "低空经济"
 E:\miniconda\envs\ym\python.exe main.py --topic "生物医药" --max_recursion_depth 2
 ```
 
+### 配置参数
+
+系统关键参数可在 `config/settings.py` 中调整：
+
+| 参数名 | 默认值 | 说明 |
+|--------|--------|------|
+| `DEFAULT_MAX_WORKFLOW_ITERATIONS` | 1000 | 工作流最大迭代次数 |
+| `DEFAULT_MAX_RECURSION_DEPTH` | 2 | 图谱递归扩展最大深度 |
+| `DEFAULT_STALL_PATIENCE_THRESHOLD` | 5 | 停滞检测阈值 |
+| `POSTERIOR_VERIFIER_THRESHOLD` | 0.6 | 证据验证通过阈值 |
+| `POSTERIOR_VERIFIER_ALPHA` | 0.6 | 词汇匹配权重 |
+| `POSTERIOR_VERIFIER_BETA` | 0.4 | NLI 语义权重 |
+
 ### 2. 运行前端可视化
 
 在后端生成 JSON 数据后，启动前端查看图谱。
@@ -137,9 +153,11 @@ npm run dev
 |                       | `global_context_builder.py`    | **全局上下文构建器**。生成行业先验知识背景。              |
 |                       | `graph_refiner.py`             | **图谱优化器**。后处理合并同义节点与优化结构。            |
 |                       | `posterior_verifier.py`        | **后验验证模块**。基于 Lexical + NLI 的证据验证核心逻辑。 |
+|                       | `workflow_logger.py`           | **工作流日志器**。格式化的 Agent 执行追踪与结果输出。     |
 |                       | `retrieval_service.py`         | **混合检索模块**。集成向量与关键词检索的统一服务层。      |
 | **`agents/`**         | `structure_planner_agent.py`   | **结构化规划Agent**。生成宏观产业架构。                   |
 |                       | `query_builder_agent.py`       | **语义查询构建Agent**。生成高召回率的检索查询。           |
 |                       | `node_extractor_agent.py`      | **节点抽取Agent**。执行微观信息抽取与递归扩展。           |
 |                       | `validator_agent.py`           | **一致性验证Agent**。执行图谱的合并与清洗。               |
+| **`config/`**         | `settings.py`                  | **配置管理**。集中管理系统参数与模型配置。                |
 | **根目录**            | `main.py`                      | **程序入口**。参数解析与系统启动脚本。                    |
