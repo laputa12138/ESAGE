@@ -1,16 +1,52 @@
-# React + Vite
+# BioChainVis - 生物医药产业链可视化
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+本项目是一个用于可视化生物医药产业链及其上下游关系的 React 应用。它能够读取 JSON 格式的产业链数据，并以交互式图形的方式展示。
 
-Currently, two official plugins are available:
+## 功能特点
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **动态数据加载**：自动读取 `public/data/` 目录下的 JSON 文件，无需修改代码。
+- **交互式图表**：展示上游、中游、下游节点及其关系。
+- **详细信息面板**：点击节点可查看详细的技术、公司及佐证信息。
+- **现代化 UI**：采用 Glassmorphism 设计风格，界面美观流畅。
 
-## React Compiler
+## 安装说明
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+1. 确保已安装 Node.js (推荐 v18+)。
+2. 安装依赖：
+   ```bash
+   npm install
+   ```
 
-## Expanding the ESLint configuration
+## 使用指南
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### 启动开发服务器
+
+```bash
+npm run dev
+```
+
+启动后，访问控制台显示的地址（通常是 `http://localhost:3000`）。
+
+### 添加/更新数据
+
+无需修改任何代码即可添加新的可视化数据：
+
+1. 将生成的 JSON 数据文件（格式需符合 E-SAGE 输出规范）放入 `public/data/` 目录。
+2. 刷新浏览器页面。
+3. 也就是右上角的“数据源”下拉菜单中会自动出现新的文件名，点击即可切换查看。
+
+> **注意**：文件列表是根据文件名自动生成的。为了方便阅读，建议使用清晰的文件名（如 `生物医药-20260123.json`）。
+
+## 构建生产版本
+
+```bash
+npm run build
+```
+
+构建产物位于 `dist` 目录。
+
+## 项目结构
+
+- `src/components/`: UI 组件 (GraphComponent, DataSelector, etc.)
+- `src/utils/`: 工具函数 (数据加载, 图形处理)
+- `public/data/`: **数据文件存放位置**
