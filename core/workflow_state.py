@@ -126,20 +126,50 @@ class WorkflowState:
         """
         根据规划智能体的输出初始化产业结构。
         structure_data 期望的键: 'upstream', 'midstream', 'downstream' (字符串列表)
-        """
-        self.industry_graph['structure'] = structure_data
         
-        # Initialize empty details for all nodes
+        [DEDUPLICATION LOGIC]
+        Enforce strict single-ownership for nodes upon initialization.
+        Priority Rule: Midstream > Downstream > Upstream.
+        If a node appears in multiple lists, it will only be kept in the highest priority list.
+        """
+        raw_structure = structure_data
+        clean_structure = {k: [] for k in ['upstream', 'midstream', 'downstream']}
+        seen_nodes = set()
+        
+        # Define priority order: Midstream first, then Downstream, then Upstream
+        priority_order = ['midstream', 'downstream', 'upstream']
+        
+        duplicates_found = 0
+        
+        for category in priority_order:
+            nodes = raw_structure.get(category, [])
+            for node in nodes:
+                if node not in seen_nodes:
+                    clean_structure[category].append(node)
+                    seen_nodes.add(node)
+                else:
+                    # Duplicate detected
+                    duplicates_found += 1
+                    logger.warning(f"[WorkflowState] Duplicate node detected during init: '{node}'. Removed from '{category}' (already placed in higher priority category).")
+
+        self.industry_graph['structure'] = clean_structure
+        
+        # Initialize empty details for all nodes (using the clean list)
         total_nodes = 0
         for category in ['upstream', 'midstream', 'downstream']:
-            nodes = structure_data.get(category, [])
+            nodes = clean_structure.get(category, [])
             for node in nodes:
                 # Initialize as None to indicate pending extraction
                 self.industry_graph['node_details'][node] = None
                 total_nodes += 1
         
         self.set_flag('structure_planned', True)
-        self.log_event("Industry graph structure initialized.", {"total_nodes": total_nodes, "structure": structure_data})
+        self.log_event("Industry graph structure initialized.", {
+            "total_nodes": total_nodes, 
+            "original_structure": raw_structure,
+            "final_structure": clean_structure,
+            "duplicates_removed": duplicates_found
+        })
 
     def add_node_to_structure(self, node_name: str, category: str) -> bool:
         """

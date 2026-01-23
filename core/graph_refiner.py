@@ -92,9 +92,9 @@ class GraphRefiner:
         """
         logger.info(f"[GraphRefiner] 正在应用 {len(suggestions)} 条合并建议...")
         
-        # 修复：正确的键名是 node_details，且 structure 是嵌套的
         details = graph.get('node_details', {})
         structure = graph.get('structure', {})
+        # 使用副本进行更新
         structure_updates = {k: list(structure.get(k, [])) for k in ['upstream', 'midstream', 'downstream']}
         
         for suggestion in suggestions:
@@ -104,57 +104,87 @@ class GraphRefiner:
             if not target or not sources:
                 continue
             
-            # Clean sources: remove target from sources if present to avoid self-merge issues
+            # Clean sources: remove target from sources if present
             sources = [s for s in sources if s != target]
-            
             if not sources:
                 continue
                 
             logger.info(f"[GraphRefiner] Merging {sources} -> {target} ({suggestion.get('reason')})")
             
-            # A. Update Details Mapping
-            # 目标节点的详细信息
+            # --- A. Update Details Mapping ---
             target_detail = details.get(target, {})
             if not target_detail: 
-                # 如果目标节点不存在，尝试从源节点中找一个最丰富的作为基础，或者新建
-                # 简单起见，从第一个存在的源节点复制
+                # 如果目标节点不存在，尝试从源节点中找一个最丰富的作为基础
                 for s in sources:
                     if s in details:
                         target_detail = details[s].copy()
-                        target_detail['entity_name'] = target # 更新名称
+                        target_detail['entity_name'] = target
                         details[target] = target_detail
                         break
             
-            # 合并源节点的信息到目标节点 (简单合并列表字段)
+            # 合并源节点的信息到目标节点
             for s in sources:
                 if s in details:
                     source_detail = details[s]
                     self._merge_node_content(target_detail, source_detail)
-                    del details[s] # 删除源节点详情
+                    del details[s]
             
-            # B. Update Structure Lists
-            for category in ['upstream', 'midstream', 'downstream']:
-                current_list = structure_updates[category]
+            # --- B. Update Structure Lists (Fixing Duplication Issue) ---
+            # 1. Determine the final category for the target node.
+            #    Priority: 
+            #    1. Already exists in a category -> Keep it there.
+            #    2. Doesn't exist -> Use the category of the first source node found.
+            #    3. Fallback -> 'upstream' (or maybe handle as error/warning)
+            
+            target_category = None
+            
+            # Check if target already exists in any category
+            for cat in ['upstream', 'midstream', 'downstream']:
+                if target in structure_updates[cat]:
+                    target_category = cat
+                    break
+            
+            # If not found, find category from sources
+            if not target_category:
+                for s in sources:
+                    for cat in ['upstream', 'midstream', 'downstream']:
+                        if s in structure_updates[cat]:
+                            target_category = cat
+                            break
+                    if target_category:
+                        break
+            
+            # Default fallback
+            if not target_category:
+                target_category = 'upstream' 
+            
+            # 2. Rebuild lists: Remove sources from ALL categories, Add target ONLY to target_category
+            for cat in ['upstream', 'midstream', 'downstream']:
+                current_list = structure_updates[cat]
                 new_list = []
-                # Replace sources with target, avoid duplicates
-                seen_target = False
+                
                 for item in current_list:
+                    # Remove sources
                     if item in sources:
-                        if not seen_target and target not in current_list: # 如果target不在原列表中，则替换第一个source
-                             new_list.append(target)
-                             seen_target = True
-                        elif target in current_list: # 如果target已在原列表中，直接移除source
-                             pass
-                    elif item == target:
-                        new_list.append(item)
-                        seen_target = True
+                        continue
+                    # Remove target if it's in the wrong category (e.g. moved via merge logic somehow, or duplicate cleanup)
+                    if item == target and cat != target_category:
+                        continue
+                    # Keep other items
+                    if item == target and cat == target_category:
+                         # We will handle adding target explicitly to ensure it's there
+                         pass 
                     else:
                         new_list.append(item)
                 
-                # Update list, removing duplicates just in case
-                structure_updates[category] = sorted(list(set(new_list)))
+                # If this is the target category, ensure target is added (once)
+                if cat == target_category:
+                     if target not in new_list:
+                         new_list.append(target)
+                
+                structure_updates[cat] = new_list
 
-        # Apply updates (修复：正确更新嵌套的 structure)
+        # Apply updates
         graph['node_details'] = details
         graph['structure'].update(structure_updates)
         
