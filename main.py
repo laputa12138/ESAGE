@@ -82,6 +82,7 @@ def main():
     parser.add_argument("--vector_top_k", type=int, default=settings.DEFAULT_VECTOR_STORE_TOP_K)
     parser.add_argument("--force_reindex", action='store_true', help="Force re-indexing documents.")
     parser.add_argument("--max_recursion_depth", type=int, default=settings.DEFAULT_MAX_RECURSION_DEPTH, help="Max recursion depth for industry chain expansion (0 = no expansion).")
+    parser.add_argument("--max_workflow_iterations", type=int, default=settings.DEFAULT_MAX_WORKFLOW_ITERATIONS, help="Max workflow iterations.")
     
 
     # Logging
@@ -129,6 +130,7 @@ def main():
             reranker_service=reranker_service,
             vector_store_path=args.vector_store_path,
             force_reindex=args.force_reindex,
+            max_workflow_iterations=args.max_workflow_iterations,
             cli_overridden_vector_top_k=args.vector_top_k
         )
 

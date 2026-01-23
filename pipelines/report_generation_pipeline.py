@@ -38,7 +38,7 @@ class ReportGenerationPipeline:
                  vector_store_path: str = settings.DEFAULT_VECTOR_STORE_PATH,
                  index_name: Optional[str] = None,
                  force_reindex: bool = False,
-                 max_workflow_iterations: int = 100,
+                 max_workflow_iterations: int = settings.DEFAULT_MAX_WORKFLOW_ITERATIONS,
                  # 索引参数
                  cli_overridden_parent_chunk_size: int = settings.DEFAULT_PARENT_CHUNK_SIZE,
                  cli_overridden_parent_chunk_overlap: int = settings.DEFAULT_PARENT_CHUNK_OVERLAP,

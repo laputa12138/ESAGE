@@ -99,7 +99,7 @@ with gr.Blocks() as iface:
 
                 with gr.Accordion("Pipeline Execution", open=False):
                     max_refinement_iterations = gr.Slider(label="Max Refinement Iterations", minimum=0, maximum=10, value=settings.DEFAULT_MAX_REFINEMENT_ITERATIONS, step=1)
-                    max_workflow_iterations = gr.Slider(label="Max Workflow Iterations", minimum=10, maximum=1000, value=settings.DEFAULT_PIPELINE_MAX_WORKFLOW_ITERATIONS, step=5)
+                    max_workflow_iterations = gr.Slider(label="Max Workflow Iterations", minimum=10, maximum=1000, value=settings.DEFAULT_MAX_WORKFLOW_ITERATIONS, step=5)
 
                 with gr.Accordion("Vector Store and Indexing", open=False):
                     vector_store_path = gr.Textbox(label="Vector Store Path", value="./my_vector_indexes/")
